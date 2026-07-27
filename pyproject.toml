@@ -1,0 +1,56 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "telos-receipt"
+version = "0.1.0"
+description = "The canonical unsigned integrity-hash receipt contract for TELOS AI Labs: one envelope both the trust surface and the MCP governance server speak. Pure stdlib, zero dependencies."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+authors = [
+    { name = "TELOS AI Labs", email = "team@telos-labs.ai" }
+]
+keywords = [
+    "telos",
+    "ai-governance",
+    "agent-governance",
+    "receipts",
+    "integrity-hash",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.5",
+]
+
+[project.urls]
+Homepage = "https://telos-labs.ai"
+Repository = "https://github.com/TELOS-Labs-AI/telos-receipt"
+
+[tool.hatch.build.targets.wheel]
+packages = ["telos_receipt"]
+
+# Explicit sdist allowlist: ship ONLY the package + metadata. Without this,
+# hatchling falls back to gitignore-based selection and an untracked workspace
+# (venvs, caches, scratch files) gets swept into the published sdist.
+[tool.hatch.build.targets.sdist]
+only-include = ["telos_receipt", "README.md", "LICENSE", "pyproject.toml"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
