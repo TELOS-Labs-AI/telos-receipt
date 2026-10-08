@@ -3,9 +3,9 @@ import base64
 import binascii
 import hashlib
 import json
-from pathlib import Path
 import re
 import sys
+from pathlib import Path
 
 from . import __version__
 
@@ -68,7 +68,9 @@ def assess_retained_bytes(data: bytes | None, expected_sha256: str | None,
     try:
         # Import on every assessment, including when an adapter is already cached.
         import cryptography  # noqa: F401 -- availability is part of the native contract
-        from ._native_vendor import hermes_v2 as adapter, verify_native_v2 as verifier
+
+        from ._native_vendor import hermes_v2 as adapter
+        from ._native_vendor import verify_native_v2 as verifier
     except ImportError:
         return _refuse("NATIVE_DEPENDENCY_UNAVAILABLE")
     native = verifier.assess_bytes(data, expected_sha256, start_previous, adapter)
@@ -97,7 +99,7 @@ def assess_request(request: object) -> dict:
     return assess_retained_bytes(data, request.get("expected_sha256"), request.get("start_previous"))
 
 
-__all__ = ["assess_retained_bytes", "assess_request", "__version__"]
+__all__ = ["__version__", "assess_request", "assess_retained_bytes"]
 
 
 def main():

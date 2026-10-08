@@ -63,20 +63,20 @@ COVERED = "payload (canonical JSON, sort_keys, compact separators)"
 # Public surface: these names. `__version__` is included on purpose
 # (callers pin against it; a public version attribute is part of the contract),
 # and MAX_DEPTH is public because the depth cap is part of the accept/refuse
-# contract. tests/test_tier2_fixes.py asserts `import *` matches this list.
+# contract.
 __all__ = [
-    "RECEIPT_VERSION",
-    "SIGNING_STATUS",
+    "COVERED",
     "ENGINE_LABEL",
     "HASH_PREFIX",
-    "COVERED",
     "MAX_DEPTH",
-    "compute_integrity_hash",
-    "build_receipt",
-    "build_action_receipt",
-    "verify_receipt",
-    "verify_native_receipts",
+    "RECEIPT_VERSION",
+    "SIGNING_STATUS",
     "__version__",
+    "build_action_receipt",
+    "build_receipt",
+    "compute_integrity_hash",
+    "verify_native_receipts",
+    "verify_receipt",
 ]
 
 

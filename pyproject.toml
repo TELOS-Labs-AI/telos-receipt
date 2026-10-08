@@ -33,7 +33,7 @@ classifiers = [
 dependencies = []
 
 [project.optional-dependencies]
-native = ["cryptography>=41.0.0"]
+native = ["cryptography>=50.0.2"]
 dev = [
     "pytest>=8.0",
     "ruff>=0.5",
@@ -55,6 +55,18 @@ only-include = ["telos_receipt", "README.md", "LICENSE", "NOTICE", "CHANGELOG.md
 [tool.ruff]
 line-length = 120
 target-version = "py310"
+extend-exclude = ["mutants"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+# These two upstream style findings are retained to preserve the source pin.
+[tool.ruff.lint.per-file-ignores]
+"telos_receipt/_native_vendor/hermes_v2.py" = ["I001", "UP012"]
+
+[tool.mutmut]
+paths_to_mutate = ["telos_receipt/__init__.py", "telos_receipt/native.py"]
+also_copy = ["telos_receipt/_native_vendor"]
 
 [tool.hatch.build]
 artifacts = ["NOTICE"]

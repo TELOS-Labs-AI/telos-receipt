@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 import pytest
+
 import telos_receipt
 
 FIXTURE = Path(__file__).parent / "native-request.json"
