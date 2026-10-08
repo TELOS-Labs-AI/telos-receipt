@@ -5,7 +5,8 @@ agent-facing trust surface (which serves + verifies receipts) and the telos-mcp
 governance server (which mints receipts when it scores an action) speak THIS
 shape, so a receipt minted by one verifies on the other with no translation.
 
-Pure stdlib, zero dependencies, offline, key-free.
+The unsigned envelope uses only the standard library. Native receipt byte
+integrity is optional and requires the native extra. Both paths are offline.
 
 The integrity hash is a SHA-256 over the canonical-JSON serialization of the
 receipt `payload`. Recomputing it confirms the payload matches the hash recorded
@@ -39,7 +40,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 RECEIPT_VERSION = "telos/0.1-unsigned"
 SIGNING_STATUS = "unsigned_integrity_hash"
@@ -59,7 +60,7 @@ _HASH_RE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 # same logical payload yields the same hash regardless of when it was served.
 COVERED = "payload (canonical JSON, sort_keys, compact separators)"
 
-# Public surface: exactly these 11 names. `__version__` is included on purpose
+# Public surface: these names. `__version__` is included on purpose
 # (callers pin against it; a public version attribute is part of the contract),
 # and MAX_DEPTH is public because the depth cap is part of the accept/refuse
 # contract. tests/test_tier2_fixes.py asserts `import *` matches this list.
@@ -74,6 +75,7 @@ __all__ = [
     "build_receipt",
     "build_action_receipt",
     "verify_receipt",
+    "verify_native_receipts",
     "__version__",
 ]
 
@@ -329,3 +331,9 @@ def _result(match: bool, stated: Any, reason: str) -> dict[str, Any]:
         "note": "integrity hash is key-free; it confirms the payload matches the recorded hash, not who issued it or when",
         "reason": reason,
     }
+
+
+def verify_native_receipts(request: object) -> dict:
+    """Assess supplied native-v2 bytes; does not verify signatures or scores."""
+    from .native import assess_request
+    return assess_request(request)

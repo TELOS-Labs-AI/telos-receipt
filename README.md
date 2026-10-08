@@ -10,7 +10,9 @@ One receipt envelope, spoken by both ends of the trust loop:
 Because both import this package, a receipt minted by the scorer verifies on the
 trust surface unchanged, no translation, no second shape to keep in sync.
 
-Pure stdlib, zero dependencies, offline, key-free.
+The unsigned envelope API uses only the Python standard library. Optional
+native-v2 receipt verification requires `telos-receipt[native]`. Both APIs run
+offline.
 
 ## The envelope
 
@@ -86,11 +88,49 @@ from telos_receipt import build_receipt, build_action_receipt, verify_receipt
 r = build_action_receipt(
     action_name="write_file",
     action_params={"path": "/tmp/x"},
-    agent_id="agent-alpha",
+    agent_id="demo-agent",
     verdict="EXECUTE",
     composite_score=0.81,
     scores={"purpose": 0.9, "scope": 0.8},
-    pa_id="pa::agent-alpha::v1",
+    pa_id="pa::demo-agent::v1",
 )
 assert verify_receipt(r)["match"] is True
 ```
+
+## Native receipt byte integrity
+
+Install `pip install 'telos-receipt[native]'` to use `verify_native_receipts`.
+Pass a JSON object with exactly these supported fields:
+
+```python
+from telos_receipt import verify_native_receipts
+
+result = verify_native_receipts({
+    "receipts_base64": "<base64-encoded native-v2 JSONL bytes>",
+    "expected_sha256": "<64 lowercase hex characters over the JSONL bytes>",
+    "start_previous": "<64 lowercase hex characters of the predecessor>",
+})
+```
+
+The verifier compares the supplied byte pin, canonical input hash, verdict hash,
+receipt hash and predecessor links for native-v2 receipts. `PASS` means these
+byte-integrity comparisons succeeded for the supplied rows. `FAIL` reports a
+mismatch. Malformed or incomplete inputs and missing optional dependencies return
+`UNAVAILABLE`, never `PASS`; an invalid row prevents the whole load from passing.
+Input is capped at 1 MiB, 32 rows and 64 KiB per row.
+
+Receipts are unsigned unless a signature is checked. This API does **not** check
+signatures, validate scores or content, establish authorship, authenticate the
+caller-supplied predecessor, or demonstrate complete workflow coverage. A supplied
+proof is reported as `PROOF_PRESENT_UNVERIFIED`; `signature_verified` stays false.
+Anyone can create a new receipt with matching hashes, so byte integrity alone
+does not establish authenticity.
+
+`python -m telos_receipt.native` reads this request from standard input and emits
+the same JSON result (exit 0 for `PASS`, 1 for `FAIL`, 2 for `UNAVAILABLE`).
+Vendored verifier attribution and the MIT permission notice are in `NOTICE`.
+
+## Related TELOS packages
+
+- [telos-mcp](https://github.com/TELOS-Labs-AI/telos-mcp): MCP tools using this receipt contract.
+- [telos-trust-surface](https://github.com/TELOS-Labs-AI/telos-trust-surface): receipt serving and verification.
