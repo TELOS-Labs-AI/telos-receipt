@@ -610,6 +610,27 @@ class C3Refusals(Case):
                 by_dir, by_bytes = self.both(files, "nopins-" + label.replace(" ", "-"), pins=pins)
                 self.assertEqual((by_dir, by_bytes), (PINS_INVALID, PINS_INVALID))
 
+    def test_c3_pins_whose_values_are_str_subclasses_are_refused_beside_the_same_values_as_plain_str(self):
+        record = self.record()
+
+        class Text(str):
+            """A str subclass: equal to the plain value, and not a value the reader is handed."""
+
+        files, canary = fixture("witnessed"), ORACLE["canary_pins"]
+        want = ORACLE["fixtures"]["witnessed"]["canary_pins"]
+        for shape in (record.Pins, types.SimpleNamespace):
+            by_dir, by_bytes = self.both(files, "plain-" + shape.__name__, pins=shape(**canary))
+            self.assert_report(by_dir, want)
+            self.assert_report(by_bytes, want)
+            for name in list(canary) + ["all three"]:
+                with self.subTest(shape=shape.__name__, subclassed=name):
+                    values = {key: Text(value) if name in (key, "all three") else value
+                              for key, value in canary.items()}
+                    self.assertEqual(values, canary)  # the same words; only their type differs
+                    by_dir, by_bytes = self.both(files, f"sub-{shape.__name__}-{name.replace(' ', '-')}",
+                                                 pins=shape(**values))
+                    self.assertEqual((by_dir, by_bytes), (PINS_INVALID, PINS_INVALID))
+
 
 class S3PinnedReader(Case):
     def setUp(self):
@@ -1318,6 +1339,44 @@ class S8PythonFloor(Case):
                 reasons = sorted(call["dir"]["report"]["witness_reason"] for call in out["calls"])
                 self.assertEqual(reasons, ["WITNESS_FILE_INVALID", "WITNESS_VERIFIER_UNAVAILABLE"])
 
+    def test_a3_1_a_row_of_another_record_reaches_the_signature_and_other_rows_keep_their_reason(self):
+        record = self.record()
+        receipt, row, reading = (fixture("witnessed")[name] for name in NAMES)
+        other = fixture("not_witnessed")  # another record; the witnessed record's row is put beside it
+        rows = [("a valid row", (receipt, row, reading), {"pins": self.canary()}, ("WITNESSED", None)),
+                ("a well-formed row of another record", (other["receipt.json"], row, other["reading.json"]),
+                 {"pins": self.canary()}, ("NOT_WITNESSED", "WITNESS_NOT_THIS_RECORD")),
+                ("a malformed row", (receipt, b"not json", reading), {"pins": self.canary()},
+                 ("NOT_WITNESSED", "WITNESS_FILE_INVALID")),
+                ("a row for other pins", (receipt, row, reading), {}, ("NOT_WITNESSED", "WITNESS_FILE_INVALID"))]
+        unavailable = ("NOT_WITNESSED", "WITNESS_VERIFIER_UNAVAILABLE")
+
+        def read(args, pins):
+            result = self.answer(record.check_record, *args, **pins)
+            return result.get("witness_state"), result.get("report", result).get("witness_reason", result.get("reason"))
+        for label, args, pins, with_it in rows:
+            with self.subTest(label):
+                self.assertEqual(read(args, pins), with_it)  # the same input with cryptography present
+                with self.without_cryptography():
+                    without = read(args, pins)
+                self.assertEqual(without, unavailable if label in ("a valid row", "a well-formed row of another "
+                                                                   "record") else with_it)
+                self.assertEqual(read(args, pins), with_it)
+
+    A3_1 = ("`witness_verifier_unavailable` is returned for every row that reaches the reader's signature step, and "
+            "only for those",
+            "a row that is malformed, or is not a row for the pins in use, is refused earlier with its earlier "
+            "reason, with or without `cryptography`",
+            "a well-formed row for these pins that names another record reaches the signature step",
+            "without `cryptography` it reads `witness_verifier_unavailable`, never `witness_not_this_record`",
+            "the reader does not report on the content of a row it could not verify")
+
+    def test_a3_1_the_module_and_the_readme_say_what_a_missing_cryptography_reads_as(self):
+        for where, said in [("module", flat(self.record().__doc__)), ("readme", flat(readme_section()))]:
+            for sentence in self.A3_1:
+                with self.subTest(where=where, sentence=sentence):
+                    self.assertIn(sentence, said)
+
 
 def flat(text):
     """Text with every run of white space as one space, lower case: what a sentence says, however it is wrapped."""
@@ -1357,6 +1416,8 @@ class R1ClosedReader(Case):
                ("a name outside the listed names of a listed module", "reading.py", b"\nfrom json import tool\n"),
                ("a relative import", "witness.py", b"\nfrom . import reading as _again\n"),
                ("a relative import of a listed name", "witness.py", b"\nfrom .pathlib import Path as _Path\n"),
+               ("a relative import of a sibling by the kit's name", "witness.py",
+                b"\nfrom .h0a import reading as _again\n"),
                ("a relative import of a listed module by the import function", "reading.py",
                 b"\n_json = __import__('json', globals(), None, (), 1)\n"),
                ("the import function called by name", "witness.py", b"\n_socket = __import__('socket')\n"),

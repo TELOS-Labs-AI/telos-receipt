@@ -75,11 +75,16 @@ signature check, each with whatever it imports itself. The closed list covers th
 Offline: no network call and no process. check_record_dir writes nothing. check_record writes its inputs into a
 private temporary directory (0700, files 0600), reads that directory with the same reader, and removes it on
 every path (see `residual` above). `cryptography` is imported by the kit reader, and only when a row reaches its
-signature check. On a machine without `cryptography` a row that reaches that check gets the kit reader's own
-answer: a report, NOT_WITNESSED, with the kit's reason WITNESS_VERIFIER_UNAVAILABLE. A row the reader refuses
-before that check (not a row, not a row for these pins, a row that is not the row its hash names) keeps the reason
-it has with `cryptography`. The reader checks the signature before it matches the row to the record, so a signed
-row of another record reads WITNESS_VERIFIER_UNAVAILABLE there, not WITNESS_NOT_THIS_RECORD. Never WITNESSED.
+signature check.
+
+Missing `cryptography`: the answer is still a report, the kit reader's own, and never WITNESSED.
+`WITNESS_VERIFIER_UNAVAILABLE` is returned for every row that reaches the reader's signature step, and only for
+those. A row that is malformed, or is not a row for the pins in use, is refused earlier with its earlier reason,
+with or without `cryptography`. A well-formed row for these pins that names another record reaches the signature
+step; without `cryptography` it reads `WITNESS_VERIFIER_UNAVAILABLE`, never `WITNESS_NOT_THIS_RECORD`, because the
+reader does not report on the content of a row it could not verify. (With `cryptography` that row reads
+`WITNESS_NOT_THIS_RECORD`. Both are NOT_WITNESSED. The order is the pinned reader's: it checks the signature before
+it compares the row's record digest, and this module runs its bytes and returns its state unchanged.)
 
 Needs Python 3.11 or later (the base package keeps its own floor and never imports this module) and a POSIX file
 system interface.
