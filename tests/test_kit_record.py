@@ -12,6 +12,16 @@ S7 `build_reference`: four payload keys, the kit's digests, verifies, validates 
 S8 Python 3.10 is refused at import beside 3.11. (Its second half waits for the kit reader's next pin.)
 S9 the existing modules are byte-identical to 0.1.1.
 
+Amendments 1 and 2 to the contract (classes R1-R5; the tests named test_a2_* are amendment 2's):
+R1/A2.1 the reader that runs is the pinned bytes, compiled from memory once; its files import each other and a
+   closed list; an `h0a` already imported is never used; what was in `sys.modules` and `sys.path` is as it was.
+   The import guard is put to the test through a private loader seam that takes reader bytes with their own pins.
+R2/A2.3 the result carries the reader's own witness state and whose pins were used; `pins=None` is no pins.
+R3/A2.2 one closed tuple of refusal reasons, no exception, and no report while the temporary directory is still
+   there (`residual: True`).
+R4 the base package never imports this module; below 3.11 the module raises its one line.
+R5 what a reference does not convey, and the DRAFT marking of the public text.
+
 The fixtures under kit_record_fixtures/ were made once by the kit's own entry points with a loopback stub Witness
 and a canary Ed25519 key that was never written to disk. `oracle.json` holds the canary PUBLIC pins and what the
 kit reader answered for every fixture and every changed directory: `canary_pins` is the kit's
@@ -54,6 +64,12 @@ MODIFIED = {"ok": False, "reason": "kit_reader_modified"}
 TOO_LARGE = {"ok": False, "reason": "input_too_large"}
 UNREADABLE = {"ok": False, "reason": "record_unreadable"}
 PINS_INVALID = {"ok": False, "reason": "pins_invalid"}
+INVALID_ARGUMENT = {"ok": False, "reason": "invalid_argument"}
+UNAVAILABLE = {"ok": False, "reason": "reader_unavailable"}
+RESIDUAL = {"ok": False, "reason": "reader_unavailable", "residual": True}
+READING_INVALID = {"ok": False, "reason": "reading_invalid"}
+REASONS = ("kit_reader_modified", "record_unreadable", "input_too_large", "pins_invalid", "invalid_argument",
+           "reader_unavailable", "reading_invalid")
 PIN_BEGIN = "# --- kit reader pin: written by tools/vendor_kit_reader.py, never by hand ---"
 PIN_END = "# --- end kit reader pin ---"
 # sha256 of each module as the published 0.1.1 wheel carries it (wheel sha256 6a5087f8...46a331)
@@ -137,8 +153,40 @@ class Case(unittest.TestCase):
         return {"commit": ORACLE["kit_commit"],
                 "files": {name: sha((VENDOR / name.split("/")[1]).read_bytes()) for name in KIT_NAMES}}
 
-    def assert_report(self, result, report):
-        self.assertEqual(result, {"ok": True, "report": report, "kit_reader": self.kit_reader()})
+    def ok(self, report, pins="caller", kit_reader=None):
+        """By hand: the whole result for a report the kit reader gave. The witness state is the oracle's own."""
+        return {"ok": True, "report": report, "witness_state": report["authenticity"], "pins": pins,
+                "kit_reader": kit_reader or self.kit_reader()}
+
+    def assert_report(self, result, report, pins="caller"):
+        self.assertEqual(result, self.ok(report, pins))
+
+    def copy_package(self, name):
+        parent = os.path.join(self.tmp, name)
+        shutil.copytree(PACKAGE, os.path.join(parent, "telos_receipt"), ignore=shutil.ignore_patterns("__pycache__"))
+        return parent
+
+    def calls(self, parent, **spec):
+        out = self.probe(dict({"pins": ORACLE["canary_pins"], "check": [str(FIXTURES / "witnessed")] * 2}, **spec),
+                         parent)
+        self.assertNotIn("import_raised", out)
+        return [(call["dir"], call["bytes"], call["reference"]) for call in out["calls"]]
+
+    def script(self, *args, env=None):
+        if not SCRIPT.is_file():
+            self.fail("tools/vendor_kit_reader.py is missing")
+        done = subprocess.run([sys.executable, "-B", str(SCRIPT), *args], capture_output=True, text=True,
+                              env=env or {"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"}, cwd=self.tmp,
+                              timeout=120, check=False)
+        return done.returncode, done.stdout, done.stderr
+
+    def export(self, name="kit"):
+        """A kit export holding the three reader files as this package vendors them."""
+        kit = os.path.join(self.tmp, name)
+        os.makedirs(os.path.join(kit, "h0a"))
+        for f in ("receipt.py", "witness.py", "reading.py"):
+            shutil.copyfile(VENDOR / f, os.path.join(kit, "h0a", f))
+        return kit
 
     def probe(self, spec, package_parent=ROOT):
         """Run PROBE in a fresh interpreter and return what it printed."""
@@ -158,13 +206,57 @@ sys.path[:0] = spec["path"]
 for name in spec.get("preimport", []):
     __import__(name)
 out = {}
+if spec.get("no_cryptography"):
+    import builtins
+    _real_import = builtins.__import__
+
+    def _no_cryptography(name, *args, **kwargs):
+        if name == "cryptography" or name.startswith("cryptography."):
+            raise ModuleNotFoundError("No module named 'cryptography'", name="cryptography")
+        return _real_import(name, *args, **kwargs)
+    builtins.__import__ = _no_cryptography
+opens = {}
+if spec.get("count_opens"):  # how often each vendored reader file is opened, by anyone, in this process
+    import builtins, os
+    _open = builtins.open
+
+    def counting(file, *args, **kwargs):
+        if isinstance(file, (str, bytes, os.PathLike)) and "_kit_vendor" in os.fsdecode(file):
+            name = os.path.basename(os.fsdecode(file))
+            opens[name] = opens.get(name, 0) + 1
+        return _open(file, *args, **kwargs)
+    builtins.open = counting
+planted, touched = {}, []
+if spec.get("plant"):
+    import types
+
+    def decoy(name):
+        module = types.ModuleType(name)
+        def missing(attribute, name=name):  # any use of the decoy asks it for a name it does not hold
+            if not attribute.startswith("__"):  # (the interpreter's own questions aside)
+                touched.append([name, attribute])
+            raise AttributeError(attribute)
+        module.__getattr__ = missing
+        return module
+    for name in ("h0a", "h0a.receipt", "h0a.witness", "h0a.reading"):
+        planted[name] = sys.modules[name] = decoy(name)
+    planted["h0a"].__path__ = []
+    for name in ("receipt", "witness", "reading"):
+        setattr(planted["h0a"], name, planted["h0a." + name])
+    held = {name: sorted(vars(module)) for name, module in planted.items()}
+
+def planted_state():
+    return {"same_objects": all(sys.modules.get(name) is module for name, module in planted.items()),
+            "same_names": all(sorted(vars(module)) == held[name] for name, module in planted.items()),
+            "touched": list(touched), "h0a_modules": sorted(n for n in sys.modules if n.split(".")[0] == "h0a")}
 
 def state():
     names = list(sys.modules)
     return {"record": "telos_receipt.record" in names,
             "h0a": sorted(n for n in names if n == "h0a" or n.startswith("h0a.")),
             "cryptography": "cryptography" in names,
-            "vendored": sorted(n for n in names if "_kit_vendor" in (getattr(sys.modules[n], "__file__", None) or "")),
+            "vendored": sorted(n for n in names if "_kit_vendor" in (getattr(sys.modules[n], "__file__", None) or "")
+                               or "_kit_vendor" in n),
             "bare": sorted(n for n in names if n in ("receipt", "witness", "reading"))}
 
 def h0a_importable():
@@ -188,7 +280,7 @@ def raw(directory, name):
         return None
 
 import telos_receipt
-out["after_package"] = state()
+out["after_package"] = dict(state(), attribute=hasattr(telos_receipt, "record"))
 if "version" in spec:
     sys.version_info = tuple(spec["version"])
 before = list(sys.path)
@@ -196,11 +288,74 @@ try:
     import telos_receipt.record as record
 except BaseException as e:
     out["import_raised"] = [type(e).__name__, str(e)]
+    built = telos_receipt.build_receipt("probe", {"a": 1}, "probe-agent")
+    out["after_refusal"] = dict(state(), base_verifies=telos_receipt.verify_receipt(built)["match"])
     print(json.dumps(out))
     sys.exit(0)
 out["after_record"] = dict(state(), sys_path_same=sys.path == before)
+out["reader_loaded"] = [bool(getattr(record, "_LOADED", None))]
 if spec.get("probe_h0a", True):
     out["after_record"]["h0a_importable"] = h0a_importable()
+if "seam" in spec:  # reader bytes handed to the private loader together with pins: their own, or the stale ones
+    import hashlib, os
+    sources, seam_pins = {}, {}
+    for name in ("reading", "witness", "receipt"):
+        with open(os.path.join(os.path.dirname(record.__file__), "_kit_vendor", name + ".py"), "rb") as stream:
+            data = stream.read()
+        stale = hashlib.sha256(data).hexdigest()
+        data += spec["seam"]["edits"].get(name + ".py", "").encode("ascii")
+        sources[name] = data
+        seam_pins["h0a/" + name + ".py"] = hashlib.sha256(data).hexdigest() if spec["seam"]["matching"] else stale
+
+    def seamed():
+        kit = record._kit(_reader=(sources, seam_pins))
+        return kit if isinstance(kit, str) else "loaded"
+    out["seam"] = attempt(seamed)
+if "pollute" in spec:  # a stand-in loader that loads the reader as the module does and then leaves one mark
+    import types
+    real_load = record._load
+
+    def polluting(*args, **kwargs):
+        kit = real_load(*args, **kwargs)
+        kind = spec["pollute"]
+        if kind == "h0a":
+            sys.modules["h0a"] = kit.receipt
+        elif kind == "h0a_child":
+            sys.modules["h0a.witness"] = kit.witness
+        elif kind == "h0a_prefix":
+            sys.modules["h0a_reader"] = types.ModuleType("h0a_reader")
+        elif kind == "private_under_another_name":
+            sys.modules["innocent_name"] = kit.reading
+        elif kind == "private_under_its_own_name":
+            sys.modules[kit.witness.__name__] = kit.witness
+        elif kind == "replaced":
+            sys.modules["sk_s_bystander"] = types.ModuleType("sk_s_bystander")
+        elif kind == "removed":  # the bystander is this probe's own module, nobody's dependency
+            del sys.modules["sk_s_bystander"]
+        elif kind == "path_appended":
+            sys.path.append(spec["path"][0])
+        elif kind == "path_rebound":
+            sys.path = list(sys.path)
+        return kit
+    record._load = polluting
+if spec.get("hygiene"):
+    import types
+    sys.modules["sk_s_bystander"] = types.ModuleType("sk_s_bystander")
+snapshot, path_object, path_before = dict(sys.modules), sys.path, list(sys.path)
+
+def hygiene():
+    loaded = getattr(record, "_LOADED", None) or [None]
+    private = [] if loaded[0] is None or isinstance(loaded[0], str) else list(loaded[0])
+    now = dict(sys.modules)
+    return {"reader_loaded": len(private),
+            "replaced_or_removed": sorted(n for n, module in snapshot.items() if now.get(n) is not module),
+            "h0a_added": sorted(n for n in now if n not in snapshot and n.startswith("h0a")),
+            "private_entered": sorted(n for n, module in now.items() if any(module is p for p in private)
+                                      or "_kit_vendor" in n or "_pinned_" in n
+                                      or "_kit_vendor" in (getattr(module, "__file__", None) or "")),
+            "path_same_object": sys.path is path_object, "path_same_contents": list(sys.path) == path_before,
+            "cryptography_added": "cryptography" in now and "cryptography" not in snapshot}
+
 pins = {"pins": record.Pins(**spec["pins"])} if "pins" in spec else {}
 out["calls"] = []
 for directory in spec.get("check", []):
@@ -211,6 +366,19 @@ for directory in spec.get("check", []):
                         agent_id="probe-agent")
     out["calls"].append(dict(state(), dir=by_dir, bytes=by_bytes, reference=reference,
                              sys_path_same=sys.path == before))
+    out["reader_loaded"].append(bool(getattr(record, "_LOADED", None)))
+    out.setdefault("opens", []).append(dict(opens))
+    if spec.get("flip") and len(out["calls"]) == 1:  # one byte of a file on disk changes after the first call
+        import io
+        with io.open(spec["flip"], "rb") as stream:
+            data = bytearray(stream.read())
+        data[4] ^= 0x01
+        with io.open(spec["flip"], "wb") as stream:
+            stream.write(bytes(data))
+if planted:
+    out["planted"] = planted_state()
+if spec.get("hygiene"):
+    out["hygiene"] = hygiene()
 print(json.dumps(out))
 '''
 
@@ -232,8 +400,8 @@ class S1SameAnswerAsTheKitReader(Case):
         for name, kit in ORACLE["fixtures"].items():
             with self.subTest(name):
                 by_dir, by_bytes = self.both(fixture(name), name)
-                self.assert_report(by_dir, kit["pinned_key_cli"])
-                self.assert_report(by_bytes, kit["pinned_key_cli"])
+                self.assert_report(by_dir, kit["pinned_key_cli"], "default")
+                self.assert_report(by_bytes, kit["pinned_key_cli"], "default")
         # beside it: the canary row is a valid row only for the canary key, never for the pinned Witness key
         witnessed = ORACLE["fixtures"]["witnessed"]
         self.assertEqual((witnessed["canary_pins"]["authenticity"], witnessed["pinned_key_cli"]["authenticity"],
@@ -270,7 +438,7 @@ class S1SameAnswerAsTheKitReader(Case):
     def test_s1_the_result_names_the_pinned_kit_reader_and_nothing_else(self):
         record = self.record()
         result = self.answer(record.check_record_dir, str(FIXTURES / "witnessed"), pins=self.canary())
-        self.assertEqual(sorted(result), ["kit_reader", "ok", "report"])
+        self.assertEqual(sorted(result), ["kit_reader", "ok", "pins", "report", "witness_state"])
         self.assertIs(result["ok"], True)
         self.assertEqual(result["kit_reader"], self.kit_reader())
         self.assertRegex(result["kit_reader"]["commit"], r"\A[0-9a-f]{40}\Z")
@@ -298,8 +466,8 @@ class S2OneChangedByte(Case):
                 self.assert_report(by_bytes, variant["canary_pins"])
                 self.assertNotEqual(variant["canary_pins"], base["canary_pins"])
                 by_dir, by_bytes = self.both(files, "pinned-" + variant["name"])
-                self.assert_report(by_dir, variant["pinned_key_cli"])
-                self.assert_report(by_bytes, variant["pinned_key_cli"])
+                self.assert_report(by_dir, variant["pinned_key_cli"], "default")
+                self.assert_report(by_bytes, variant["pinned_key_cli"], "default")
 
     def test_s2_no_single_byte_change_of_the_witnessed_record_still_reads_witnessed_with_its_reading(self):
         base = ORACLE["fixtures"]["witnessed"]["canary_pins"]
@@ -340,16 +508,18 @@ class C3Refusals(Case):
                 self.assert_report(self.answer(record.check_record_dir, path, pins=self.canary()), want)
         for label, path in [("None", None), ("int", 7), ("list", [good]), ("dict", {})]:
             with self.subTest(label):
-                self.assertEqual(self.answer(record.check_record_dir, path), UNREADABLE)
+                self.assertEqual(self.answer(record.check_record_dir, path), INVALID_ARGUMENT)
 
     def test_c3_a_path_no_file_system_call_takes_is_refused_beside_the_same_path_without_the_fault(self):
         record = self.record()
         good = self.directory(fixture("not_witnessed"), "good")
         self.assertIs(self.answer(record.check_record_dir, good)["ok"], True)
-        for label, path in [("a NUL", good + "\0"), ("a NUL in bytes", os.fsencode(good) + b"\0"),
-                            ("a lone surrogate", good + "\ud800")]:
+        for label, path in [("a NUL", good + "\0"), ("a NUL in bytes", os.fsencode(good) + b"\0")]:
             with self.subTest(label):
                 self.assertEqual(self.answer(record.check_record_dir, path), UNREADABLE)
+        # a str that cannot be encoded at all (a lone surrogate) is no argument, beside one that names raw bytes
+        self.assertEqual(self.answer(record.check_record_dir, good + "\ud800"), INVALID_ARGUMENT)
+        self.assertEqual(self.answer(record.check_record_dir, good + "\udcff"), UNREADABLE)
 
     @unittest.skipUnless(hasattr(os, "geteuid") and os.geteuid() != 0, "needs a user that file modes apply to")
     def test_c3_a_receipt_this_user_may_not_open_is_refused_beside_the_same_file_made_readable(self):
@@ -405,7 +575,7 @@ class C3Refusals(Case):
                             ("row str", (receipt, row.decode(), reading)), ("row list", (receipt, [row], reading)),
                             ("reading str", (receipt, row, reading.decode())), ("reading int", (receipt, row, 7))]:
             with self.subTest(label):
-                self.assertEqual(self.answer(record.check_record, *args, pins=self.canary()), UNREADABLE)
+                self.assertEqual(self.answer(record.check_record, *args, pins=self.canary()), INVALID_ARGUMENT)
 
     def test_c3_bytes_that_are_no_receipt_get_the_readers_report_and_never_an_exception(self):
         self.record()
@@ -443,19 +613,9 @@ class S3PinnedReader(Case):
         super().setUp()
         self.record()  # nothing to pin, copy or vendor without the module: a failed guarantee, not a broken test
 
-    def copy_package(self, name):
-        parent = os.path.join(self.tmp, name)
-        shutil.copytree(PACKAGE, os.path.join(parent, "telos_receipt"), ignore=shutil.ignore_patterns("__pycache__"))
-        return parent
-
-    def calls(self, parent):
-        out = self.probe({"pins": ORACLE["canary_pins"], "check": [str(FIXTURES / "witnessed")] * 2}, parent)
-        self.assertNotIn("import_raised", out)
-        return [(call["dir"], call["bytes"], call["reference"]) for call in out["calls"]]
-
     def test_s3_one_changed_byte_in_any_vendored_file_refuses_every_call_beside_the_intact_files(self):
         intact = self.calls(self.copy_package("intact"))
-        want = {"ok": True, "report": ORACLE["fixtures"]["witnessed"]["canary_pins"], "kit_reader": self.kit_reader()}
+        want = self.ok(ORACLE["fixtures"]["witnessed"]["canary_pins"])
         for by_dir, by_bytes, reference in intact:
             self.assertEqual((by_dir, by_bytes), (want, want))
             self.assertEqual(reference["kind"], "kit_record_reference")
@@ -485,22 +645,6 @@ class S3PinnedReader(Case):
                          ["__init__.py", "reading.py", "receipt.py", "witness.py"])
 
     # --- the vendoring script ---
-
-    def script(self, *args, env=None):
-        if not SCRIPT.is_file():
-            self.fail("tools/vendor_kit_reader.py is missing")
-        done = subprocess.run([sys.executable, "-B", str(SCRIPT), *args], capture_output=True, text=True,
-                              env=env or {"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1"}, cwd=self.tmp,
-                              timeout=120, check=False)
-        return done.returncode, done.stdout, done.stderr
-
-    def export(self, name="kit"):
-        """A kit export holding the three reader files as this package vendors them."""
-        kit = os.path.join(self.tmp, name)
-        os.makedirs(os.path.join(kit, "h0a"))
-        for f in ("receipt.py", "witness.py", "reading.py"):
-            shutil.copyfile(VENDOR / f, os.path.join(kit, "h0a", f))
-        return kit
 
     def unpinned_package(self, name="unpinned"):
         """A copy of the package with the three vendored files removed and every pin value zeroed."""
@@ -637,7 +781,7 @@ class S4ImportHygiene(Case):
         self.record()
         out = self.probe({})
         self.assertEqual(out["after_package"], {"record": False, "h0a": [], "cryptography": False, "vendored": [],
-                                                "bare": []})
+                                                "bare": [], "attribute": False})
 
     def test_s4_importing_record_leaves_sys_path_alone_and_h0a_still_cannot_be_imported(self):
         self.record()
@@ -678,8 +822,7 @@ class S4ImportHygiene(Case):
             b"    return {'authenticity': 'WITNESSED', 'reason': None,\n"
             b"            'witness': {'key_fingerprint': 'decoy', 'row': 1, 'timestamp': 'decoy'}}, None\n"))
         spec = {"pins": ORACLE["canary_pins"], "check": [str(FIXTURES / "not_witnessed")], "probe_h0a": False}
-        want = {"ok": True, "report": ORACLE["fixtures"]["not_witnessed"]["canary_pins"],
-                "kit_reader": self.kit_reader()}
+        want = self.ok(ORACLE["fixtures"]["not_witnessed"]["canary_pins"])
         for label, path in [("no decoy", []), ("decoy first on the path", [decoy])]:
             with self.subTest(label):
                 out = self.probe(dict(spec, path=path))
@@ -797,9 +940,9 @@ class S5NoNetworkNoProcess(Case):
                     patch.start()
                 try:
                     if fail:
-                        with self.assertRaisesRegex(RuntimeError, "the check raised inside"):
-                            record.check_record(files["receipt.json"], files["witness.json"], files["reading.json"],
-                                                pins=self.canary())
+                        self.assertEqual(self.answer(record.check_record, files["receipt.json"],
+                                                     files["witness.json"], files["reading.json"],
+                                                     pins=self.canary()), UNAVAILABLE)
                     else:
                         self.assertIs(self.answer(record.check_record, files["receipt.json"], files["witness.json"],
                                                   files["reading.json"], pins=self.canary())["ok"], True)
@@ -949,17 +1092,21 @@ class S7Reference(Case):
         self.assertEqual(ORACLE["fixtures"]["witnessed"]["request_the_stub_received"],
                          ORACLE["fixtures"]["witnessed"]["kit_request"])
 
-    def test_s7_the_reading_digest_is_null_unless_the_reading_is_this_records_saved_reading(self):
+    def test_s7_the_reading_digest_is_null_only_without_a_reading_and_a_reading_not_this_records_is_refused(self):
         record = self.record()
         receipt, reading = fixture("witnessed")["receipt.json"], fixture("witnessed")["reading.json"]
         named = self.answer(record.build_reference, receipt, reading, agent_id="a")["payload"]["reading_sha256"]
         self.assertEqual(named, sha(reading))
-        for label, other in [("no reading", None), ("another record's reading", fixture("refused")["reading.json"]),
-                             ("not a reading", b"{}")]:
+        payload = self.answer(record.build_reference, receipt, None, agent_id="a")["payload"]
+        self.assertEqual(sorted(payload), list(self.PAYLOAD))
+        self.assertIsNone(payload["reading_sha256"])
+        self.assertEqual(self.answer(record.build_reference, receipt, agent_id="a")["payload"], payload)
+        # a reading that is supplied and is not this record's saved reading is never read as "no reading"
+        for label, other in [("another record's reading", fixture("refused")["reading.json"]),
+                             ("not a reading", b"{}"), ("empty", b""), ("not json", b"not json"),
+                             ("not utf-8", b"\xff\xfe")]:
             with self.subTest(label):
-                payload = self.answer(record.build_reference, receipt, other, agent_id="a")["payload"]
-                self.assertEqual(sorted(payload), list(self.PAYLOAD))
-                self.assertIsNone(payload["reading_sha256"])
+                self.assertEqual(self.answer(record.build_reference, receipt, other, agent_id="a"), READING_INVALID)
 
     def test_s7_the_reference_verifies_and_a_changed_payload_does_not(self):
         reference = self.reference()
@@ -1041,32 +1188,31 @@ class S7Reference(Case):
         files = fixture("witnessed")
         receipt, reading = files["receipt.json"], files["reading.json"]
         self.assertEqual(self.reference()["kind"], "kit_record_reference")
-        for label, args in [("empty", (b"",)), ("not json", (b"not json",)), ("another schema", (b'{"schema":2}',)),
-                            ("receipt None", (None,)), ("receipt str", (receipt.decode(),)),
-                            ("reading str", (receipt, reading.decode()))]:
+        for label, args in [("empty", (b"",)), ("not json", (b"not json",)), ("another schema", (b'{"schema":2}',))]:
             with self.subTest(label):
                 self.assertEqual(self.answer(record.build_reference, *args, agent_id="a"), UNREADABLE)
+        for label, args in [("receipt None", (None,)), ("receipt str", (receipt.decode(),)),
+                            ("receipt bytearray", (bytearray(receipt),)), ("reading str", (receipt, reading.decode())),
+                            ("reading int", (receipt, 7))]:
+            with self.subTest(label):
+                self.assertEqual(self.answer(record.build_reference, *args, agent_id="a"), INVALID_ARGUMENT)
         over = receipt + b" " * (1048577 - len(receipt))
         self.assertEqual(self.answer(record.build_reference, over, agent_id="a"), TOO_LARGE)
         self.assertEqual(self.answer(record.build_reference, receipt, reading + b" " * (32769 - len(reading)),
                                      agent_id="a"), TOO_LARGE)
 
-    def test_s7_an_agent_id_that_is_not_a_string_raises_beside_one_that_is(self):
+    def test_s7_an_agent_id_that_is_not_a_string_is_refused_beside_one_that_is(self):
         record = self.record()
         receipt = fixture("witnessed")["receipt.json"]
         self.assertEqual(self.answer(record.build_reference, receipt, agent_id="a")["agent_id"], "a")
-        for bad in (None, 7, b"a", ["a"]):
+        for bad in (None, 7, b"a", ["a"], "a\ud800"):  # the last: a str no UTF-8 text can carry (a lone surrogate)
             with self.subTest(repr(bad)):
-                try:
-                    result = record.build_reference(receipt, agent_id=bad)
-                except TypeError as e:
-                    self.assertEqual(str(e), "agent_id must be a str")
-                else:
-                    self.fail(f"no TypeError; returned {result!r}")
+                self.assertEqual(self.answer(record.build_reference, receipt, agent_id=bad), INVALID_ARGUMENT)
 
 
 class S8PythonFloor(Case):
-    PREIMPORT = ("builtins", "hashlib", "json", "os", "shutil", "stat", "tempfile", "threading", "types", "typing")
+    PREIMPORT = ("builtins", "hashlib", "json", "os", "re", "shutil", "stat", "tempfile", "threading", "types",
+                 "typing")
     REFUSED = ("RuntimeError", "telos_receipt.record needs Python 3.11 or later")
 
     def test_s8_importing_record_under_python_3_10_raises_beside_3_11(self):
@@ -1097,17 +1243,83 @@ class S8PythonFloor(Case):
             return real(name, *args, **kwargs)
         return mock.patch.object(builtins, "__import__", blocked)
 
-    @unittest.skipIf(WAITING, "waits for the kit re-pin: the pinned reader has no WITNESS_VERIFIER_UNAVAILABLE")
-    def test_s8_without_cryptography_a_row_reads_verifier_unavailable_beside_witnessed_with_it(self):
+    # the records whose row is a contract row for the canary pins, so that reading them reaches the signature
+    REACHED = ("witnessed", "reading_byte", "receipt_byte", "signature_byte", "row_of_another_record")
+    RE_PIN = "waits for the kit re-pin: the pinned reader has no WITNESS_VERIFIER_UNAVAILABLE"
+
+    @unittest.skipIf(WAITING, RE_PIN)
+    def test_s8_without_cryptography_a_row_that_reaches_the_signature_reads_verifier_unavailable_beside_with_it(self):
+        self.record()
+        cases = [(name, fixture(name), kit) for name, kit in ORACLE["fixtures"].items()]
+        cases += [(variant["name"], changed(variant), variant) for variant in ORACLE["variants"]]
+        reached = set()
+        for name, files, kit in cases:
+            with self.subTest(name):
+                with_it = self.both(files, "with-" + name, pins=self.canary())
+                with self.without_cryptography():
+                    without = self.both(files, "without-" + name, pins=self.canary())
+                for result in with_it:
+                    self.assert_report(result, kit["canary_pins"])
+                for result in without:  # what the kit reader itself answered without a verifier
+                    self.assert_report(result, kit["canary_pins_no_verifier"])
+                report = without[0]["report"]
+                if report["witness_reason"] == "WITNESS_VERIFIER_UNAVAILABLE":
+                    reached.add(name)
+                    self.assertEqual((without[0]["ok"], without[0]["witness_state"], report["authenticity"]),
+                                     (True, "NOT_WITNESSED", "NOT_WITNESSED"))
+                else:  # refused before the signature: the same answer, reason included, with or without it
+                    self.assertEqual(without, with_it)
+        self.assertEqual(reached, set(self.REACHED))
+
+    @unittest.skipIf(WAITING, RE_PIN)
+    def test_s8_a_row_refused_before_the_signature_keeps_its_reason_without_cryptography_in_either_order(self):
         record = self.record()
-        files = fixture("witnessed")
-        args = [files[name] for name in NAMES]
-        self.assertEqual(self.answer(record.check_record, *args, pins=self.canary())["report"]["authenticity"],
-                         "WITNESSED")
+        receipt, row, reading = (fixture("witnessed")[name] for name in NAMES)
+        parsed = json.loads(row)
+        over_its_hash = changed(next(v for v in ORACLE["variants"] if v["name"] == "row_byte"))["witness.json"]
+        early = [("not json", b"not json"), ("no row", b"{}"),
+                 ("a field missing", canon({k: v for k, v in parsed.items() if k != "row"})),
+                 ("a signature that is not base64",
+                  canon(dict(parsed, signature_envelope=dict(parsed["signature_envelope"], value="not base64!")))),
+                 ("a row that is not the row its hash names", over_its_hash)]
+        unavailable, invalid = ("NOT_WITNESSED", "WITNESS_VERIFIER_UNAVAILABLE"), ("NOT_WITNESSED",
+                                                                                 "WITNESS_FILE_INVALID")
+
+        def read(row_bytes, **pins):
+            result = self.answer(record.check_record, receipt, row_bytes, reading, **pins)
+            return result.get("witness_state"), result["report"]["witness_reason"]
+        self.assertEqual(read(row, pins=self.canary()), ("WITNESSED", None))
+        for label, bad in early:
+            with self.subTest(label, verifier=True):
+                self.assertEqual(read(bad, pins=self.canary()), invalid)
         with self.without_cryptography():
-            report = self.answer(record.check_record, *args, pins=self.canary())["report"]
-        self.assertEqual((report["authenticity"], report["witness_reason"]),
-                         ("NOT_WITNESSED", "WITNESS_VERIFIER_UNAVAILABLE"))
+            self.assertEqual(read(row, pins=self.canary()), unavailable)  # first the row that reaches the signature
+            for label, bad in early:                                       # then the rows that do not
+                with self.subTest(label, verifier=False):
+                    self.assertEqual(read(bad, pins=self.canary()), invalid)
+            # a row that is not a row for the pins it is read under (the canary row, the kit's pinned key)
+            self.assertEqual(read(row), invalid)
+            self.assertEqual(read(row, pins=self.canary()), unavailable)  # and after them, the first row again
+        # nothing of that is remembered: with the verifier back the same row reads WITNESSED
+        self.assertEqual(read(row, pins=self.canary()), ("WITNESSED", None))
+
+    @unittest.skipIf(WAITING, RE_PIN)
+    def test_s8_a_process_that_never_had_cryptography_reads_verifier_unavailable_and_raises_nothing(self):
+        self.record()
+        row_byte = self.directory(changed(next(v for v in ORACLE["variants"] if v["name"] == "row_byte")), "row-byte")
+        for order in ([str(FIXTURES / "witnessed"), row_byte], [row_byte, str(FIXTURES / "witnessed")]):
+            with self.subTest(first=os.path.basename(order[0])):
+                out = self.probe({"pins": ORACLE["canary_pins"], "check": order, "no_cryptography": True})
+                self.assertNotIn("import_raised", out)
+                for directory, call in zip(order, out["calls"]):
+                    kit = (ORACLE["fixtures"]["witnessed"] if directory.endswith("witnessed")
+                           else next(v for v in ORACLE["variants"] if v["name"] == "row_byte"))
+                    want = self.ok(kit["canary_pins_no_verifier"])
+                    self.assertEqual((call["dir"], call["bytes"]), (want, want))
+                    self.assertIs(call["cryptography"], False)
+                    self.assertEqual(call["reference"].get("kind"), "kit_record_reference")
+                reasons = sorted(call["dir"]["report"]["witness_reason"] for call in out["calls"])
+                self.assertEqual(reasons, ["WITNESS_FILE_INVALID", "WITNESS_VERIFIER_UNAVAILABLE"])
 
     @unittest.skipUnless(WAITING, "the pinned reader answers a missing verifier itself")
     def test_s8_until_the_re_pin_a_missing_cryptography_gives_no_report_at_all_and_never_witnessed(self):
@@ -1119,15 +1331,870 @@ class S8PythonFloor(Case):
         with self.without_cryptography():
             for call, call_args in [(record.check_record, args),
                                     (record.check_record_dir, [str(FIXTURES / "witnessed")])]:
-                try:
-                    result = call(*call_args, pins=self.canary())
-                except ImportError:
-                    continue
-                self.fail(f"a result came back without the signature check: {result!r}")
+                self.assertEqual(self.answer(call, *call_args, pins=self.canary()), UNAVAILABLE)
             # a record with no row to check never needs it
             plain = fixture("not_witnessed")
             self.assert_report(self.answer(record.check_record, plain["receipt.json"], None, plain["reading.json"],
                                            pins=self.canary()), ORACLE["fixtures"]["not_witnessed"]["canary_pins"])
+
+
+def flat(text):
+    """Text with every run of white space as one space, lower case: what a sentence says, however it is wrapped."""
+    return " ".join(text.split()).lower()
+
+
+def readme_section():
+    """The README's section on reading a kit record, heading included."""
+    text = (ROOT / "README.md").read_text(encoding="utf-8")
+    start = text.index("## Reading a kit record (DRAFT)")
+    return text[start:text.index("\n## ", start + 1)]
+
+
+def vendored_pins():
+    """The Witness key the vendored witness.py pins, read from its PINS line as text."""
+    line = re.search(rb"^PINS = Pins\(public_key='([0-9a-f]{64})',\s+fingerprint='([0-9a-f]{64})',\s+"
+                     rb"anchor='([0-9a-f]{64})'\)$", (VENDOR / "witness.py").read_bytes(), re.MULTILINE)
+    return None if line is None else tuple(value.decode("ascii") for value in line.groups())
+
+
+class R1ClosedReader(Case):
+    """Amendment 1: the reader that runs is the pinned bytes, and what those bytes import is one closed list."""
+
+    def setUp(self):
+        super().setUp()
+        self.record()
+
+    SWALLOWED = (b"\n\n_pinned_check_record = check_record\n\n\ndef check_record(path, *, pins=witness.PINS):\n"
+                 b"    try:\n        import ctypes\n    except Exception:\n        pass\n"
+                 b"    return _pinned_check_record(path, pins=pins)\n")
+    OUTSIDE = [("a standard library module off the list", "witness.py", b"\nimport socket\n"),
+               ("the load-by-path module the kit falls back to", "receipt.py", b"\nimport importlib.util\n"),
+               ("a package whose two listed modules are the only ones on the list", "receipt.py",
+                b"\nimport cryptography\n"),
+               ("another module of the kit", "reading.py", b"\nfrom h0a import store\n"),
+               ("the kit package itself", "reading.py", b"\nimport h0a\n"),
+               ("a name outside the listed names of a listed module", "reading.py", b"\nfrom json import tool\n"),
+               ("a relative import", "witness.py", b"\nfrom . import reading as _again\n"),
+               ("a relative import of a listed name", "witness.py", b"\nfrom .pathlib import Path as _Path\n"),
+               ("a relative import of a listed module by the import function", "reading.py",
+                b"\n_json = __import__('json', globals(), None, (), 1)\n"),
+               ("the import function called by name", "witness.py", b"\n_socket = __import__('socket')\n"),
+               ("an import at call time whose failure the file swallows", "receipt.py", SWALLOWED)]
+
+    def seamed(self, edits, matching=True):
+        """(what the private loader answered, the three answers of two rounds of calls) in a fresh interpreter whose
+        reader is the vendored bytes plus `edits` ({file name: bytes appended}), handed to the private loader with
+        pins that are their own (matching) or the module's (stale). No file is changed anywhere."""
+        out = self.probe({"pins": ORACLE["canary_pins"], "check": [str(FIXTURES / "witnessed")] * 2,
+                          "seam": {"edits": {f: added.decode("ascii") for f, added in edits.items()},
+                                   "matching": matching}})
+        self.assertNotIn("import_raised", out)
+        return out["seam"], [(call["dir"], call["bytes"], call["reference"]) for call in out["calls"]]
+
+    def test_a2_1_reader_bytes_that_match_their_pins_and_import_outside_the_closed_list_are_refused_beside_intact(self):
+        want = self.ok(ORACLE["fixtures"]["witnessed"]["canary_pins"])
+        for label, edits in [("the files as pinned", {}),
+                             ("one more import of a listed module", {"witness.py": b"\nimport json\nimport hashlib\n",
+                                                                     "reading.py": b"\nfrom pathlib import Path\n"})]:
+            with self.subTest(label):
+                seam, calls = self.seamed(edits)
+                self.assertEqual(seam, "loaded")
+                for by_dir, by_bytes, reference in calls:
+                    self.assertEqual((by_dir, by_bytes), (want, want))
+                    self.assertEqual(reference.get("kind"), "kit_record_reference")
+        for label, f, added in self.OUTSIDE:
+            with self.subTest(label):
+                # the pin check passes (the pins are these bytes' own) and the import guard is what refuses
+                seam, calls = self.seamed({f: added})
+                if added is self.SWALLOWED:
+                    self.assertEqual(seam, "loaded")  # the import is asked for at call time, not at load
+                else:
+                    self.assertEqual(seam.get("raised", [None])[0] if isinstance(seam, dict) else seam, "ImportError")
+                self.assertEqual(calls, [(UNAVAILABLE, UNAVAILABLE, UNAVAILABLE)] * 2)
+            with self.subTest(label, pins="the module's, which these bytes do not match"):
+                seam, calls = self.seamed({f: added}, matching=False)
+                self.assertEqual(seam, "kit_reader_modified")
+                self.assertEqual(calls, [(MODIFIED, MODIFIED, MODIFIED)] * 2)
+        # without the seam the same bytes on disk are a modified reader
+        parent = self.copy_package("on-disk")
+        with open(os.path.join(parent, "telos_receipt", "_kit_vendor", "witness.py"), "ab") as stream:
+            stream.write(b"\nimport socket\n")
+        self.assertEqual(self.calls(parent), [(MODIFIED, MODIFIED, MODIFIED)] * 2)
+        self.assertEqual({name: sha((VENDOR / name.split("/")[1]).read_bytes()) for name in KIT_NAMES},
+                         self.record().KIT_FILES)  # the real copies are as they were
+
+    def test_a2_1_the_public_functions_cannot_reach_the_loader_seam(self):
+        import inspect
+        record = self.record()
+        self.assertIn("_reader", inspect.signature(record._kit).parameters)  # the seam is there, and private
+        self.assertIs(inspect.signature(record._kit).parameters["_reader"].kind, inspect.Parameter.KEYWORD_ONLY)
+        want = {"check_record_dir": ["path", "pins"], "check_record": ["receipt", "witness", "reading", "pins"],
+                "build_reference": ["receipt", "reading", "agent_id"]}
+        for name, parameters in want.items():
+            with self.subTest(name):
+                self.assertEqual(list(inspect.signature(getattr(record, name)).parameters), parameters)
+        self.assertNotIn("_kit", record.__all__)
+        # in the source: `_reader` is named in the loader and its latch alone, and every other call of either
+        # passes nothing at all
+        tree = ast.parse((PACKAGE / "record.py").read_text(encoding="utf-8"))
+        named, calls = set(), []
+        for function in (node for node in tree.body if isinstance(node, ast.FunctionDef)):
+            for node in ast.walk(function):
+                if "_reader" in (getattr(node, "id", None), getattr(node, "arg", None)):
+                    named.add(function.name)
+                if isinstance(node, ast.Call) and getattr(node.func, "id", None) in ("_kit", "_load"):
+                    calls.append((function.name, node.func.id, len(node.args), [k.arg for k in node.keywords]))
+        self.assertEqual(named, {"_load", "_kit"})
+        self.assertEqual(sorted(calls), [("_build_reference", "_kit", 0, []), ("_check_record", "_kit", 0, []),
+                                         ("_check_record_dir", "_kit", 0, []), ("_kit", "_load", 0, ["_reader"])])
+        # handed in as an argument it is only a wrong argument, beside the same call without it
+        home, seam = str(FIXTURES / "witnessed"), ({}, {})
+        self.assertIs(self.answer(record.check_record_dir, home)["ok"], True)
+        self.assertEqual(self.answer(record.check_record_dir, home, pins=seam), PINS_INVALID)
+        self.assertEqual(self.answer(record.check_record_dir, seam), INVALID_ARGUMENT)
+
+    POLLUTIONS = {  # the mark a stand-in loader leaves -> what the reading of that process then shows
+        "h0a": {"h0a_added": ["h0a"], "private_entered": ["h0a"]},  # (a reader module, under an h0a name)
+        "h0a_child": {"h0a_added": ["h0a.witness"], "private_entered": ["h0a.witness"]},
+        "h0a_prefix": {"h0a_added": ["h0a_reader"]},
+        "private_under_another_name": {"private_entered": ["innocent_name"]},
+        "private_under_its_own_name": {"private_entered": ["telos_receipt._kit_vendor._pinned_witness"]},
+        "replaced": {"replaced_or_removed": ["sk_s_bystander"]},
+        "removed": {"replaced_or_removed": ["sk_s_bystander"]},
+        "path_appended": {"path_same_contents": False},
+        "path_rebound": {"path_same_object": False}}
+
+    def test_a2_1_what_was_in_sys_modules_and_sys_path_is_as_it_was_beside_a_loader_that_leaves_a_mark(self):
+        names = ("not_witnessed", "witnessed")
+        spec = {"pins": ORACLE["canary_pins"], "check": [str(FIXTURES / name) for name in names], "probe_h0a": False,
+                "hygiene": True}
+        want = [self.ok(ORACLE["fixtures"][name]["canary_pins"]) for name in names]
+        clean = {"reader_loaded": 3, "replaced_or_removed": [], "h0a_added": [], "private_entered": [],
+                 "path_same_object": True, "path_same_contents": True, "cryptography_added": True}
+        for label, extra in [("the module's loader", {}), ("the module's loader, an h0a family planted", {"plant": 1})]:
+            with self.subTest(label):
+                out = self.probe(dict(spec, **extra))
+                self.assertNotIn("import_raised", out)
+                self.assertEqual([(call["dir"], call["bytes"]) for call in out["calls"]], [(w, w) for w in want])
+                # cryptography is the one thing a call adds here that the module did not hold: a dependency
+                self.assertEqual(out["hygiene"], clean)
+                if extra:
+                    self.assertEqual(out["planted"], {"same_objects": True, "same_names": True, "touched": [],
+                                                      "h0a_modules": ["h0a", "h0a.reading", "h0a.receipt",
+                                                                      "h0a.witness"]})
+        for kind, shows in self.POLLUTIONS.items():
+            with self.subTest(pollution=kind):  # the same reading of the same process catches each mark
+                out = self.probe(dict(spec, pollute=kind))
+                self.assertEqual([(call["dir"], call["bytes"]) for call in out["calls"]], [(w, w) for w in want])
+                self.assertEqual(out["hygiene"], dict(clean, **shows))
+
+    def test_a2_1_the_module_says_what_a_call_adds_to_sys_modules_and_what_it_never_does(self):
+        said = flat(self.record().__doc__)
+        for sentence in ("no entry that is already in `sys.modules` is replaced or removed",
+                         "what the reader imports is added to `sys.modules`",
+                         "`cryptography` at the first call that reaches the signature check",
+                         "`sys.path` is not changed"):
+            with self.subTest(sentence):
+                self.assertIn(sentence, said)
+        self.assertNotIn("nothing is added to `sys.path` or `sys.modules`", said)
+
+    def test_r1_the_reader_files_import_exactly_the_closed_list_and_each_other(self):
+        allowed = getattr(self.record(), "_ALLOWED_IMPORTS", None)
+        if allowed is None:
+            self.fail("telos_receipt.record names no closed list of what the reader may import")
+        used, siblings, fallback = {}, set(), set()
+        for f in ("receipt.py", "witness.py", "reading.py"):
+            tree = ast.parse((VENDOR / f).read_bytes())
+            in_fallback = {id(node) for handler in ast.walk(tree) if isinstance(handler, ast.ExceptHandler)
+                           and isinstance(handler.type, ast.Name) and handler.type.id == "ImportError"
+                           for node in ast.walk(handler)}
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    found = [(alias.name, set()) for alias in node.names]
+                elif isinstance(node, ast.ImportFrom):
+                    self.assertEqual(node.level, 0, f)
+                    found = [(node.module, {alias.name for alias in node.names})]
+                else:
+                    continue
+                for name, names in found:
+                    if id(node) in in_fallback:
+                        fallback.add(name)
+                    elif name == "h0a":
+                        siblings |= names
+                    else:
+                        used.setdefault(name, set()).update(names)
+        self.assertEqual(siblings, {"receipt", "witness", "reading"})
+        # the two load-by-path fallbacks (`except ImportError`) are never reached here; reaching one is a refusal,
+        # shown by the test above
+        self.assertEqual(fallback, {"importlib.util"})
+        self.assertEqual(used, {name: set(names) for name, names in allowed.items()})
+        for name in ("importlib", "importlib.util", "socket", "h0a", "cryptography", "telos_receipt"):
+            self.assertNotIn(name, allowed)
+
+    def test_r1_an_h0a_already_in_sys_modules_is_never_used_and_is_left_as_it_was(self):
+        names = ("witnessed", "not_witnessed")
+        spec = {"pins": ORACLE["canary_pins"], "check": [str(FIXTURES / name) for name in names], "probe_h0a": False}
+        want = [self.ok(ORACLE["fixtures"][name]["canary_pins"]) for name in names]
+        for label, plant in [("nothing planted", False), ("h0a and its three modules planted before first use", True)]:
+            with self.subTest(label):
+                out = self.probe(dict(spec, plant=plant))
+                self.assertNotIn("import_raised", out)
+                for call, expected in zip(out["calls"], want):
+                    self.assertEqual((call["dir"], call["bytes"]), (expected, expected))
+                    self.assertEqual(call["reference"].get("kind"), "kit_record_reference")
+                    self.assertEqual(call["vendored"], [])
+                if plant:
+                    self.assertEqual(out["planted"], {"same_objects": True, "same_names": True, "touched": [],
+                                                      "h0a_modules": ["h0a", "h0a.reading", "h0a.receipt",
+                                                                      "h0a.witness"]})
+                else:
+                    self.assertEqual([call["h0a"] for call in out["calls"]], [[], []])
+
+    def test_r1_the_check_is_latched_at_first_use_a_later_change_on_disk_is_neither_used_nor_detected(self):
+        parent = self.copy_package("latched")
+        path = os.path.join(parent, "telos_receipt", "_kit_vendor", "witness.py")
+        want = self.ok(ORACLE["fixtures"]["witnessed"]["canary_pins"])
+        out = self.probe({"pins": ORACLE["canary_pins"], "check": [str(FIXTURES / "witnessed")] * 2, "flip": path,
+                          "count_opens": True}, parent)
+        self.assertEqual(out["reader_loaded"], [False, True, True])  # nothing is read or checked before the first call
+        # each file was opened once in the life of that process: what was hashed is what was compiled
+        self.assertEqual(out["opens"], [{"reading.py": 1, "witness.py": 1, "receipt.py": 1}] * 2)
+        self.assertNotEqual(sha(Path(path).read_bytes()), sha((VENDOR / "witness.py").read_bytes()))
+        # the file changed between the two calls of that process: the second call ran the bytes checked at the first
+        self.assertEqual([(call["dir"], call["bytes"]) for call in out["calls"]], [(want, want)] * 2)
+        # beside it: a process that starts after the change refuses every call
+        self.assertEqual(self.calls(parent), [(MODIFIED, MODIFIED, MODIFIED)] * 2)
+
+    def test_r1_the_module_and_the_readme_say_what_the_check_does_and_does_not_do(self):
+        said = flat(self.record().__doc__)
+        for sentence in ("verification is latched at first use", "the bytes verified are the bytes executed",
+                         "neither used nor detected", "closed list"):
+            with self.subTest(sentence):
+                self.assertIn(sentence, said)
+        self.assertIn("any change of reader bytes at a re-pin requires a delta review and refreshed oracle evidence",
+                      flat(readme_section()))
+
+
+class R2WitnessState(Case):
+    """Amendment 2: `ok` says the reader ran; authenticity is the reader's own witness state and nothing else."""
+    KEYS = ["kit_reader", "ok", "pins", "report", "witness_state"]
+
+    def test_r2_the_result_carries_the_readers_witness_state_and_whose_pins_were_used(self):
+        self.record()
+        seen = set()
+        for name, kit in ORACLE["fixtures"].items():
+            for label, pins, oracle in [("caller", {"pins": self.canary()}, kit["canary_pins"]),
+                                        ("default", {}, kit["pinned_key_cli"])]:
+                with self.subTest(name=name, pins=label):
+                    for result in self.both(fixture(name), name + "-" + label, **pins):
+                        self.assertEqual(sorted(result), self.KEYS)
+                        self.assertIs(result["ok"], True)
+                        self.assertEqual(result["report"], oracle)
+                        self.assertEqual((result["witness_state"], result["pins"]), (oracle["authenticity"], label))
+                        seen.add((label, result["witness_state"]))
+        self.assertEqual(seen, {("caller", "WITNESSED"), ("caller", "NOT_WITNESSED"), ("default", "NOT_WITNESSED")})
+
+    def test_r2_pins_a_caller_supplies_are_named_caller_also_when_they_are_the_kits_own(self):
+        record = self.record()
+        kit_pins = vendored_pins()
+        if kit_pins is None:
+            self.fail("the vendored witness.py has no PINS line of the known form")
+        home = str(FIXTURES / "witnessed")
+        by_default = self.answer(record.check_record_dir, home)
+        by_caller = self.answer(record.check_record_dir, home, pins=record.Pins(*kit_pins))
+        self.assertEqual((by_default.get("pins"), by_caller.get("pins")), ("default", "caller"))
+        self.assertEqual({key: value for key, value in by_caller.items() if key != "pins"},
+                         {key: value for key, value in by_default.items() if key != "pins"})
+
+    def test_a2_3_pins_none_is_the_same_call_as_no_pins_and_only_other_pins_are_named_caller(self):
+        record = self.record()
+        kit_pins = vendored_pins()
+        if kit_pins is None:
+            self.fail("the vendored witness.py has no PINS line of the known form")
+        for name in ("witnessed", "not_witnessed"):
+            with self.subTest(name):
+                files, home = [fixture(name).get(f) for f in NAMES], str(FIXTURES / name)
+                want = self.ok(ORACLE["fixtures"][name]["pinned_key_cli"], "default")
+                for call, args in [(record.check_record_dir, [home]), (record.check_record, files)]:
+                    omitted, none = self.answer(call, *args), self.answer(call, *args, pins=None)
+                    self.assertEqual((omitted, none), (want, want))
+                    for label, pins in [("the canary's", self.canary()), ("the kit's own", record.Pins(*kit_pins)),
+                                        ("the kit's own as another object", types.SimpleNamespace(
+                                            public_key=kit_pins[0], fingerprint=kit_pins[1], anchor=kit_pins[2]))]:
+                        with self.subTest(call=call.__name__, pins=label):
+                            self.assertEqual(self.answer(call, *args, pins=pins).get("pins"), "caller")
+                    for label, pins in [("False", False), ("zero", 0), ("empty", ())]:
+                        with self.subTest(call=call.__name__, pins=label):  # nothing but None stands for no pins
+                            self.assertEqual(self.answer(call, *args, pins=pins), PINS_INVALID)
+
+    def watched(self, fake=None):
+        """The loaded reader, a patch of its check_record, and the (report, state) pairs the real one returned."""
+        record = self.record()
+        self.answer(record.check_record_dir, str(FIXTURES / "witnessed"))  # loads the reader
+        reader = record._kit().receipt
+        real, returned = reader.check_record, []
+
+        def passing(path, *, pins):
+            returned.append(real(path, pins=pins))
+            return returned[-1] if fake is None else fake(*returned[-1])
+        return mock.patch.object(reader, "check_record", passing), returned
+
+    def test_r2_the_report_is_the_object_the_reader_returned_and_the_state_is_its_second_value(self):
+        record = self.record()
+        files = fixture("witnessed")
+        patch, returned = self.watched()
+        with patch:
+            by_dir = self.answer(record.check_record_dir, str(FIXTURES / "witnessed"), pins=self.canary())
+            by_bytes = self.answer(record.check_record, *(files[name] for name in NAMES), pins=self.canary())
+        self.assertEqual(len(returned), 2)
+        for result, (report, state) in zip((by_dir, by_bytes), returned):
+            self.assertIs(result["report"], report)
+            self.assertEqual(report, ORACLE["fixtures"]["witnessed"]["canary_pins"])  # and nothing in it was changed
+            self.assertEqual((result.get("witness_state"), state["authenticity"]), ("WITNESSED", "WITNESSED"))
+
+    def test_r2_a_reader_return_that_is_not_a_report_and_a_known_state_that_agree_is_refused_beside_the_real_one(self):
+        from types import MappingProxyType
+        record = self.record()
+        files = fixture("witnessed")
+        patch, _returned = self.watched()
+        with patch:  # the real return, passed through the same patch
+            self.assert_report(self.answer(record.check_record_dir, str(FIXTURES / "witnessed"), pins=self.canary()),
+                               ORACLE["fixtures"]["witnessed"]["canary_pins"])
+        not_witnessed = {"authenticity": "NOT_WITNESSED", "witness": None, "reason": "WITNESS_FILE_INVALID"}
+        fakes = [("the report says WITNESSED and the state does not", lambda report, state: (report, not_witnessed)),
+                 ("the state says WITNESSED and the report does not",
+                  lambda report, state: (dict(report, authenticity="NOT_WITNESSED"), state)),
+                 ("a state that is neither of the two",
+                  lambda report, state: (dict(report, authenticity="MAYBE"), dict(state, authenticity="MAYBE"))),
+                 ("no state", lambda report, state: (report, None)),
+                 ("a state that is a mapping and no dict", lambda report, state: (report, MappingProxyType(state))),
+                 ("a report that is a mapping and no dict", lambda report, state: (MappingProxyType(report), state)),
+                 ("a state that is a word, not the reader's state", lambda report, state: (report, "WITNESSED")),
+                 ("a report alone", lambda report, state: report),
+                 ("no report", lambda report, state: (None, state)),
+                 ("three values", lambda report, state: (report, state, state))]
+        for label, fake in fakes:
+            with self.subTest(label):
+                patch, _returned = self.watched(fake)
+                with patch:
+                    by_dir = self.answer(record.check_record_dir, str(FIXTURES / "witnessed"), pins=self.canary())
+                    by_bytes = self.answer(record.check_record, *(files[name] for name in NAMES), pins=self.canary())
+                self.assertEqual((by_dir, by_bytes), (UNAVAILABLE, UNAVAILABLE))
+
+    SAID = ("means the reader ran", "not that the record is authentic", "authenticity is the witness state only",
+            "binds the supplied digests to a witness signature", "observed execution", "commissioning",
+            "every reading")
+
+    def test_r2_the_module_its_functions_and_the_readme_say_what_ok_and_witnessed_mean(self):
+        record = self.record()
+        texts = [("module", record.__doc__), ("check_record_dir", record.check_record_dir.__doc__),
+                 ("check_record", record.check_record.__doc__), ("README", readme_section())]
+        for where, text in texts:
+            for sentence in self.SAID[:3] if where.startswith("check_record") else self.SAID:
+                with self.subTest(where=where, sentence=sentence):
+                    self.assertIn(sentence, flat(text))
+
+
+class R3FixedRefusals(Case):
+    """Amendment 3: every answer is a report or one of a closed tuple of refusals; nothing is raised or left behind."""
+
+    def args(self, name="witnessed"):
+        files = fixture(name)
+        return [files.get(f) for f in NAMES]
+
+    def temporary(self, label):
+        root = os.path.join(self.tmp, "temporary-" + label)
+        os.mkdir(root)
+        return root, mock.patch.object(tempfile, "tempdir", root)
+
+    def reader(self):
+        record = self.record()
+        self.answer(record.check_record_dir, str(FIXTURES / "witnessed"))  # loads the reader
+        return record._kit()
+
+    def test_r3_the_reasons_are_one_closed_tuple(self):
+        record = self.record()
+        self.assertEqual(getattr(record, "REASONS", None), REASONS)
+        self.assertIn("REASONS", record.__all__)
+        said, readme = flat(record.__doc__), flat(readme_section())
+        for reason in REASONS:
+            with self.subTest(reason):
+                self.assertIn(reason, said)
+                self.assertIn(reason, readme)
+
+    def test_r3_an_argument_of_the_wrong_type_is_refused_in_each_function_beside_the_right_type(self):
+        record = self.record()
+        receipt, row, reading = self.args()
+        home = str(FIXTURES / "witnessed")
+        want = ORACLE["fixtures"]["witnessed"]["canary_pins"]
+        for path in (home, os.fsencode(home), Path(home)):
+            self.assert_report(self.answer(record.check_record_dir, path, pins=self.canary()), want)
+        self.assert_report(self.answer(record.check_record, receipt, row, reading, pins=self.canary()), want)
+        self.assertIs(self.answer(record.check_record, receipt, None, None)["ok"], True)
+        self.assertEqual(self.answer(record.build_reference, receipt, reading, agent_id="a").get("kind"),
+                         "kit_record_reference")
+        wrong = (7, 1.5, True, [receipt], {"receipt": receipt}, bytearray(receipt), memoryview(receipt), object())
+        for bad in wrong + (None, receipt.decode()):
+            with self.subTest(function="check_record", argument="receipt", type=type(bad).__name__):
+                self.assertEqual(self.answer(record.check_record, bad, row, reading), INVALID_ARGUMENT)
+            with self.subTest(function="build_reference", argument="receipt", type=type(bad).__name__):
+                self.assertEqual(self.answer(record.build_reference, bad, reading, agent_id="a"), INVALID_ARGUMENT)
+        for bad in wrong + (receipt.decode(),):
+            with self.subTest(function="check_record", argument="witness", type=type(bad).__name__):
+                self.assertEqual(self.answer(record.check_record, receipt, bad, reading), INVALID_ARGUMENT)
+            with self.subTest(function="check_record", argument="reading", type=type(bad).__name__):
+                self.assertEqual(self.answer(record.check_record, receipt, row, bad), INVALID_ARGUMENT)
+            with self.subTest(function="build_reference", argument="reading", type=type(bad).__name__):
+                self.assertEqual(self.answer(record.build_reference, receipt, bad, agent_id="a"), INVALID_ARGUMENT)
+        for bad in (7, 1.5, True, [home], {}, object(), None, bytearray(os.fsencode(home))):
+            with self.subTest(function="check_record_dir", argument="path", type=type(bad).__name__):
+                self.assertEqual(self.answer(record.check_record_dir, bad), INVALID_ARGUMENT)
+        for bad in (7, 1.5, True, ["a"], {}, object(), None, b"a"):
+            with self.subTest(function="build_reference", argument="agent_id", type=type(bad).__name__):
+                self.assertEqual(self.answer(record.build_reference, receipt, reading, agent_id=bad),
+                                 INVALID_ARGUMENT)
+
+    def test_r3_a_lone_surrogate_is_refused_or_read_and_never_raises_beside_the_same_call_without_it(self):
+        record = self.record()
+        receipt, row, reading = self.args()
+        home = self.directory(fixture("witnessed"), "plain")
+        lone = "\ud800"
+        self.assertIs(self.answer(record.check_record_dir, home)["ok"], True)
+        self.assertEqual(self.answer(record.check_record_dir, home + lone), INVALID_ARGUMENT)
+        self.assertEqual(self.answer(record.check_record_dir, Path(home + lone)), INVALID_ARGUMENT)
+        self.assertEqual(self.answer(record.build_reference, receipt, reading, agent_id="agent").get("agent_id"),
+                         "agent")
+        self.assertEqual(self.answer(record.build_reference, receipt, reading, agent_id="agent" + lone),
+                         INVALID_ARGUMENT)
+        # pins that carry one are no pins
+        canary = ORACLE["canary_pins"]
+        self.assertEqual(self.answer(record.check_record, receipt, row, reading,
+                                     pins=record.Pins(**canary)).get("witness_state"), "WITNESSED")
+        for name in ("public_key", "fingerprint", "anchor"):
+            with self.subTest(pins=name):
+                pins = record.Pins(**dict(canary, **{name: canary[name][:-1] + lone}))
+                self.assertEqual(self.answer(record.check_record, receipt, row, reading, pins=pins), PINS_INVALID)
+                self.assertEqual(self.answer(record.check_record_dir, home, pins=pins), PINS_INVALID)
+        # bytes whose JSON text escapes one are a receipt the reader reads as no valid receipt
+        escaped = b'{"schema":1,"runtime":"\\ud800","runtime_sha256":"\\ud800","review":null}'
+        result = self.answer(record.check_record, escaped)
+        self.assertEqual((result.get("ok"), result["report"]["structure"]), (True, "INVALID"))
+        self.assertEqual(self.answer(record.build_reference, escaped, agent_id="a"), UNREADABLE)
+
+    def test_r3_no_temporary_directory_is_a_refusal_beside_the_same_call_with_one(self):
+        record = self.record()
+        want = ORACLE["fixtures"]["witnessed"]["canary_pins"]
+        self.assert_report(self.answer(record.check_record, *self.args(), pins=self.canary()), want)
+        for error in (OSError(28, "No space left on device"), PermissionError(13, "Permission denied"),
+                      FileNotFoundError(2, "No usable temporary directory"), RuntimeError("no directory")):
+            with self.subTest(type(error).__name__):
+                with mock.patch.object(tempfile, "mkdtemp", side_effect=error):
+                    self.assertEqual(self.answer(record.check_record, *self.args(), pins=self.canary()), UNAVAILABLE)
+
+    def test_r3_a_failure_after_the_directory_is_made_removes_it_and_is_a_refusal_beside_a_call_that_completes(self):
+        record = self.record()
+        real = getattr(record, "_put", None)
+        if real is None:
+            self.fail("telos_receipt.record has no _put: this test injects its failure there")
+        for label, fail_at in [("completes", None), ("the first file", 1), ("the second file", 2),
+                               ("the third file", 3)]:
+            with self.subTest(label):
+                root, in_root = self.temporary(label.replace(" ", "-"))
+                written = []
+
+                def putting(path, raw):
+                    written.append(path)
+                    if len(written) == fail_at:
+                        raise OSError(28, "No space left on device")
+                    return real(path, raw)
+                with in_root, mock.patch.object(record, "_put", putting):
+                    result = self.answer(record.check_record, *self.args(), pins=self.canary())
+                if fail_at is None:
+                    self.assert_report(result, ORACLE["fixtures"]["witnessed"]["canary_pins"])
+                else:
+                    self.assertEqual(result, UNAVAILABLE)
+                self.assertEqual(len(written), fail_at or 3)  # the directory was made and written to
+                self.assertTrue(all(os.path.dirname(path).startswith(os.path.join(root, "")) for path in written))
+                self.assertEqual(os.listdir(root), [])
+
+    def made(self):
+        """A patch of tempfile.mkdtemp that notes each directory the module made."""
+        real, homes = tempfile.mkdtemp, []
+
+        def making(*args, **kwargs):
+            homes.append(real(*args, **kwargs))
+            return homes[-1]
+        return homes, mock.patch.object(tempfile, "mkdtemp", making)
+
+    def test_a2_2_after_an_internal_error_the_directory_is_removed_and_gone_beside_a_call_that_reports(self):
+        record = self.record()
+        reader = self.reader().receipt
+        want = ORACLE["fixtures"]["witnessed"]["canary_pins"]
+        real_put = record._put
+
+        def failing_put(path, raw):
+            real_put(path, raw)
+            raise OSError(5, "Input/output error")
+        faults = [("no fault", None), ("the reader raises", mock.patch.object(reader, "check_record",
+                                                                              side_effect=RuntimeError("inside"))),
+                  ("a write fails after it wrote", mock.patch.object(record, "_put", failing_put)),
+                  ("the reader returns no report", mock.patch.object(reader, "check_record", return_value=None))]
+        for label, fault in faults:
+            with self.subTest(label):
+                root, in_root = self.temporary(label.replace(" ", "-"))
+                homes, noting = self.made()
+                with in_root, noting, (fault or mock.patch.object(record, "_put", real_put)):
+                    result = self.answer(record.check_record, *self.args(), pins=self.canary())
+                if fault is None:
+                    self.assert_report(result, want)
+                else:
+                    self.assertEqual(result, UNAVAILABLE)  # and no `residual`: nothing is left
+                self.assertEqual(len(homes), 1)
+                self.assertTrue(homes[0].startswith(os.path.join(root, "")))
+                self.assertFalse(os.path.lexists(homes[0]))
+                self.assertEqual(os.listdir(root), [])
+
+    def removal(self, root, behaviour):
+        """A patch of shutil.rmtree that, for directories under `root` only, raises ("fails"), raises the first time
+        ("fails once") or returns having removed nothing ("does nothing"); every other removal is the real one."""
+        real, asked = shutil.rmtree, []
+
+        def removing(path, *args, **kwargs):
+            if not os.fspath(path).startswith(os.path.join(root, "")):
+                return real(path, *args, **kwargs)
+            asked.append(path)
+            if behaviour == "does nothing" or (behaviour == "fails" and kwargs.get("ignore_errors")):
+                return None
+            if behaviour == "fails" or (behaviour == "fails once" and len(asked) == 1):
+                raise OSError(16, "Resource busy")
+            return real(path, *args, **kwargs)
+        return asked, mock.patch.object(shutil, "rmtree", removing)
+
+    def test_a2_2_a_directory_that_cannot_be_removed_is_residual_true_and_no_report_beside_one_that_can(self):
+        record = self.record()
+        reader = self.reader().receipt
+        want = ORACLE["fixtures"]["witnessed"]["canary_pins"]
+        if os.geteuid() == 0:
+            self.fail("run as an ordinary user: the superuser can remove what this test makes unremovable")
+        for label, behaviour, fault, residual in [
+                ("the removal works", None, False, False),
+                ("the removal fails once and the second attempt removes it", "fails once", False, False),
+                ("the removal fails every time", "fails", False, True),
+                ("the removal returns and the directory is still there", "does nothing", False, True),
+                ("the reader raises and the removal fails every time", "fails", True, True),
+                ("the reader raises and the removal works", None, True, False)]:
+            with self.subTest(label):
+                root, in_root = self.temporary(label.replace(" ", "-"))
+                homes, noting = self.made()
+                asked, removing = self.removal(root, behaviour)
+                raising = mock.patch.object(reader, "check_record", **({"side_effect": RuntimeError("inside")}
+                                                                       if fault else {"wraps": reader.check_record}))
+                with in_root, noting, removing, raising:
+                    result = self.answer(record.check_record, *self.args(), pins=self.canary())
+                self.assertEqual(len(homes), 1)
+                if residual:
+                    self.assertEqual(result, RESIDUAL)  # the reader had answered WITNESSED; that answer is not given
+                    self.assertNotIn(root, json.dumps(result))
+                    self.assertGreaterEqual(len(asked), 1)
+                    self.assertTrue(os.path.isdir(homes[0]))
+                    shutil.rmtree(homes[0])  # this test removes what the module could not
+                elif fault:
+                    self.assertEqual(result, UNAVAILABLE)
+                else:
+                    self.assert_report(result, want)
+                self.assertFalse(os.path.lexists(homes[0]))
+                self.assertEqual(os.listdir(root), [])
+
+    def test_a2_2_a_genuine_removal_failure_is_residual_true_with_no_path_beside_the_same_call_unhindered(self):
+        record = self.record()
+        if os.geteuid() == 0:
+            self.fail("run as an ordinary user: the superuser can remove what this test makes unremovable")
+        want = ORACLE["fixtures"]["witnessed"]["canary_pins"]
+        real = tempfile.mkdtemp
+        for label, hinder in [("unhindered", False), ("its parent turns read-only once it is made", True)]:
+            with self.subTest(label):
+                root, in_root = self.temporary(label.split()[0])
+                homes = []
+
+                def making(*args, **kwargs):
+                    homes.append(real(*args, **kwargs))
+                    if hinder:
+                        os.chmod(root, 0o500)  # the files inside can still go; the directory itself cannot
+                    return homes[-1]
+                try:
+                    with in_root, mock.patch.object(tempfile, "mkdtemp", making):
+                        result = self.answer(record.check_record, *self.args(), pins=self.canary())
+                finally:
+                    os.chmod(root, 0o700)
+                self.assertEqual(len(homes), 1)
+                if hinder:
+                    self.assertEqual(result, RESIDUAL)
+                    for part in (root, homes[0], os.path.basename(homes[0])):
+                        self.assertNotIn(part, json.dumps(result))
+                    self.assertTrue(os.path.isdir(homes[0]))
+                    shutil.rmtree(homes[0])  # this test removes what the module could not
+                else:
+                    self.assert_report(result, want)
+                self.assertFalse(os.path.lexists(homes[0]))
+                self.assertEqual(os.listdir(root), [])
+
+    def test_a2_2_after_a_breach_of_the_closed_list_a_directory_left_behind_is_still_residual_true(self):
+        record = self.record()
+        for label, breach, behaviour, want in [("no breach, removed", [], None, None),
+                                               ("a breach, removed", ["'socket'"], None, UNAVAILABLE),
+                                               ("a breach, not removed", ["'socket'"], "fails", RESIDUAL),
+                                               ("no breach, not removed", [], "fails", RESIDUAL)]:
+            with self.subTest(label):
+                root, in_root = self.temporary(label.replace(", ", "-").replace(" ", "-"))
+                homes, noting = self.made()
+                _asked, removing = self.removal(root, behaviour)
+                with in_root, noting, removing, mock.patch.object(record, "_OUTSIDE", breach):
+                    result = self.answer(record.check_record, *self.args(), pins=self.canary())
+                if want is None:
+                    self.assert_report(result, ORACLE["fixtures"]["witnessed"]["canary_pins"])
+                else:
+                    self.assertEqual(result, want)
+                if behaviour:
+                    shutil.rmtree(homes[0])  # this test removes what the module could not
+                self.assertEqual(os.listdir(root), [])
+
+    def test_a2_2_no_other_refusal_says_residual_and_the_module_says_what_residual_means(self):
+        record = self.record()
+        receipt, row, reading = self.args()
+        home = str(FIXTURES / "witnessed")
+        refusals = [self.answer(record.check_record, 7), self.answer(record.check_record, receipt + b" " * (1 << 20)),
+                    self.answer(record.check_record, receipt, row, reading, pins=7),
+                    self.answer(record.check_record_dir, os.path.join(self.tmp, "nothing")),
+                    self.answer(record.check_record_dir, 7), self.answer(record.check_record_dir, home, pins=7),
+                    self.answer(record.build_reference, b"{}", agent_id="a"),
+                    self.answer(record.build_reference, receipt, b"{}", agent_id="a"),
+                    self.answer(record.build_reference, receipt, reading, agent_id=7)]
+        with mock.patch.object(tempfile, "mkdtemp", side_effect=OSError(28, "No space left on device")):
+            refusals.append(self.answer(record.check_record, receipt, row, reading))
+        self.assertEqual(sorted({r["reason"] for r in refusals}), sorted(set(REASONS) - {"kit_reader_modified"}))
+        for refusal in refusals:
+            self.assertEqual(sorted(refusal), ["ok", "reason"])
+        self.assertEqual(sorted(self.answer(record.check_record, receipt, row, reading)),
+                         ["kit_reader", "ok", "pins", "report", "witness_state"])
+        for where, said in [("module", flat(record.__doc__)), ("check_record", flat(record.check_record.__doc__)),
+                            ("readme", flat(readme_section()))]:
+            with self.subTest(where):
+                self.assertIn('"residual": true', said)
+                self.assertIn("could not be removed", said)
+
+    def test_r3_whatever_the_reader_raises_is_a_refusal_and_the_directory_is_gone_beside_a_reader_that_answers(self):
+        record = self.record()
+        reader = self.reader().receipt
+        home = str(FIXTURES / "witnessed")
+        root, in_root = self.temporary("reader")
+        with in_root:
+            self.assert_report(self.answer(record.check_record, *self.args(), pins=self.canary()),
+                               ORACLE["fixtures"]["witnessed"]["canary_pins"])
+            for error in (RuntimeError("inside"), ValueError("inside"), KeyError("inside"), RecursionError("inside"),
+                          MemoryError(), ImportError("inside"), AssertionError("inside"), TypeError("inside")):
+                with self.subTest(type(error).__name__):
+                    with mock.patch.object(reader, "check_record", side_effect=error):
+                        self.assertEqual(self.answer(record.check_record_dir, home, pins=self.canary()), UNAVAILABLE)
+                        self.assertEqual(self.answer(record.check_record, *self.args(), pins=self.canary()),
+                                         UNAVAILABLE)
+                    self.assertEqual(os.listdir(root), [])
+            # the reader's OSError is its word for a receipt it could not open: unreadable in a directory the caller
+            # named, and a failure of this module's own temporary directory when the caller gave bytes
+            with mock.patch.object(reader, "check_record", side_effect=OSError(5, "Input/output error")):
+                self.assertEqual(self.answer(record.check_record_dir, home, pins=self.canary()), UNREADABLE)
+                self.assertEqual(self.answer(record.check_record, *self.args(), pins=self.canary()), UNAVAILABLE)
+            self.assertEqual(os.listdir(root), [])
+            # an interrupt is not an answer: it passes through, and the directory is still removed
+            with mock.patch.object(reader, "check_record", side_effect=KeyboardInterrupt()):
+                with self.assertRaises(KeyboardInterrupt):
+                    record.check_record(*self.args(), pins=self.canary())
+            self.assertEqual(os.listdir(root), [])
+
+    def test_r3_build_reference_refuses_whatever_the_reader_raises_or_misnames_beside_the_reader_as_it_is(self):
+        record = self.record()
+        kit = self.reader()
+        receipt, _row, reading = self.args()
+        self.assertEqual(self.answer(record.build_reference, receipt, reading, agent_id="a").get("kind"),
+                         "kit_record_reference")
+        for error in (RuntimeError("inside"), KeyError("inside"), RecursionError("inside"), OSError(5, "inside")):
+            with self.subTest(type(error).__name__):
+                with mock.patch.object(kit.receipt, "check_receipt", side_effect=error):
+                    self.assertEqual(self.answer(record.build_reference, receipt, reading, agent_id="a"), UNAVAILABLE)
+                with mock.patch.object(kit.witness, "request_bytes", side_effect=error):
+                    self.assertEqual(self.answer(record.build_reference, receipt, reading, agent_id="a"), UNAVAILABLE)
+        named = json.loads(kit.witness.request_bytes(receipt, reading))
+        for label, change in [("a digest in capitals", {"record_sha256": named["record_sha256"].upper()}),
+                              ("a digest one character short", {"config_identity": named["config_identity"][:-1]}),
+                              ("a digest that is not a string", {"record_sha256": 7}),
+                              ("a reading digest in capitals", {"reading_sha256": named["reading_sha256"].upper()}),
+                              ("a reading digest that is not the digest of the reading",
+                               {"reading_sha256": "0" * 64}),
+                              ("a record schema that is not a string", {"record_schema": 7})]:
+            with self.subTest(label):
+                with mock.patch.object(kit.witness, "request_bytes", return_value=canon(dict(named, **change))):
+                    self.assertEqual(self.answer(record.build_reference, receipt, reading, agent_id="a"), UNAVAILABLE)
+        for label, value in [("bytes that are no JSON", b"not json"), ("JSON that is no object", b"[1]"),
+                             ("an object without the names", b"{}")]:
+            with self.subTest(label):
+                with mock.patch.object(kit.witness, "request_bytes", return_value=value):
+                    self.assertEqual(self.answer(record.build_reference, receipt, reading, agent_id="a"), UNAVAILABLE)
+
+    def test_r3_each_digest_is_lowercase_64_hex_and_the_reading_digest_is_the_sha256_of_the_supplied_bytes(self):
+        record = self.record()
+        for name in ORACLE["fixtures"]:
+            with self.subTest(name):
+                receipt, _row, reading = self.args(name)
+                payload = self.answer(record.build_reference, receipt, reading, agent_id="a")["payload"]
+                for field in ("record_sha256", "config_identity", "reading_sha256"):
+                    self.assertRegex(payload[field], r"\A[0-9a-f]{64}\Z")
+                self.assertEqual(payload["reading_sha256"], hashlib.sha256(reading).hexdigest())
+                # the record digest is the kit's: of its canonical bytes of the runtime segment, not of the file
+                runtime = json.loads(receipt)["runtime"]
+                self.assertEqual(payload["record_sha256"], hashlib.sha256(canon(runtime)).hexdigest())
+                self.assertNotEqual(payload["record_sha256"], hashlib.sha256(receipt).hexdigest())
+        # other bytes that are still this record's saved reading are named by their own digest, exactly
+        receipt, _row, reading = self.args()
+        spaced = reading + b"\n"
+        named = self.answer(record.build_reference, receipt, spaced, agent_id="a")["payload"]["reading_sha256"]
+        self.assertEqual(named, hashlib.sha256(spaced).hexdigest())
+        self.assertNotEqual(named, hashlib.sha256(reading).hexdigest())
+        said = flat(record.build_reference.__doc__)
+        self.assertIn("lowercase 64-hex sha256 of the exact supplied bytes", said)
+        self.assertIn("reading_invalid", said)
+
+    def test_r3_build_reference_has_the_caps_of_check_record_each_refused_one_byte_over_beside_the_cap(self):
+        record = self.record()
+        receipt, row, reading = self.args()
+        for label, at_cap, over in [("receipt", (receipt + b" " * (1048576 - len(receipt)), reading),
+                                     (receipt + b" " * (1048577 - len(receipt)), reading)),
+                                    ("reading", (receipt, reading + b" " * (32768 - len(reading))),
+                                     (receipt, reading + b" " * (32769 - len(reading))))]:
+            with self.subTest(label):
+                self.assertEqual(self.answer(record.build_reference, *at_cap, agent_id="a").get("kind"),
+                                 "kit_record_reference")
+                self.assertEqual(self.answer(record.build_reference, *over, agent_id="a"), TOO_LARGE)
+                # the same bytes meet the same answer in check_record
+                self.assertIs(self.answer(record.check_record, at_cap[0], row, at_cap[1])["ok"], True)
+                self.assertEqual(self.answer(record.check_record, over[0], row, over[1]), TOO_LARGE)
+
+
+class R4LazyImport(Case):
+    """Amendment 4: the base package never loads this module or the reader; below 3.11 only this module refuses."""
+    REFUSED = ["RuntimeError", "telos_receipt.record needs Python 3.11 or later"]
+
+    def test_r4_importing_the_package_loads_neither_the_module_nor_the_reader(self):
+        self.record()
+        out = self.probe({"probe_h0a": False})
+        self.assertEqual(out["after_package"], {"record": False, "h0a": [], "cryptography": False, "vendored": [],
+                                                "bare": [], "attribute": False})
+        imported = set()
+        for node in ast.walk(ast.parse((PACKAGE / "__init__.py").read_bytes())):
+            if isinstance(node, (ast.Import, ast.ImportFrom)):
+                imported |= {alias.name for alias in node.names} | {getattr(node, "module", None) or ""}
+        self.assertEqual(sorted(name for name in imported if "record" in name or "_kit_vendor" in name), [])
+
+    def test_r4_importing_the_module_reads_no_reader_file_until_the_first_call(self):
+        self.record()
+        out = self.probe({"pins": ORACLE["canary_pins"], "check": [str(FIXTURES / "not_witnessed")]})
+        self.assertNotIn("import_raised", out)
+        self.assertEqual(out["reader_loaded"], [False, True])
+        self.assertEqual((out["after_record"]["vendored"], out["calls"][0]["vendored"]), ([], []))
+
+    def test_r4_below_3_11_the_module_refuses_by_its_one_line_and_the_package_still_works_beside_3_11(self):
+        self.record()
+        preimport = list(S8PythonFloor.PREIMPORT)
+        for version, raised in [((3, 11, 0, "final", 0), None), ((3, 10, 14, "final", 0), self.REFUSED)]:
+            with self.subTest(version):
+                out = self.probe({"version": version, "preimport": preimport, "probe_h0a": False})
+                self.assertEqual(out.get("import_raised"), raised)
+                if raised:
+                    self.assertEqual(out["after_refusal"], {"record": False, "h0a": [], "cryptography": False,
+                                                            "vendored": [], "bare": [], "base_verifies": True})
+                else:
+                    self.assertIs(out["after_record"]["record"], True)
+
+    OLD = "/usr/bin/python3"
+
+    def old_python(self):
+        """The version of the interpreter at OLD when it is older than 3.11, else None."""
+        if not os.path.exists(self.OLD):
+            return None
+        done = subprocess.run([self.OLD, "-c", "import sys; print(list(sys.version_info[:2]))"], capture_output=True,
+                              text=True, timeout=120, check=False, env={"PATH": "/usr/bin:/bin"})
+        version = json.loads(done.stdout) if done.returncode == 0 else [9, 9]
+        return version if version < [3, 11] else None
+
+    def test_r4_on_a_real_interpreter_older_than_3_11_the_package_imports_and_the_module_raises_its_one_line(self):
+        version = self.old_python()
+        if version is None:
+            self.skipTest(f"{self.OLD} is not an interpreter older than 3.11")
+        code = ("import json, sys\nsys.path.insert(0, sys.argv[1])\nimport telos_receipt\n"
+                "built = telos_receipt.build_receipt('probe', {'a': 1}, 'probe-agent')\n"
+                "out = {'base_verifies': telos_receipt.verify_receipt(built)['match']}\n"
+                "try:\n    import telos_receipt.record\nexcept BaseException as e:\n"
+                "    out['raised'] = [type(e).__name__, str(e)]\n"
+                "out['record'] = 'telos_receipt.record' in sys.modules\n"
+                "out['vendored'] = sorted(n for n in sys.modules if '_kit_vendor' in n)\nprint(json.dumps(out))\n")
+        done = subprocess.run([self.OLD, "-B", "-c", code, str(ROOT)], capture_output=True, text=True, timeout=120,
+                              check=False, cwd=self.tmp, env={"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1",
+                                                              "HOME": self.tmp})
+        self.assertEqual((done.returncode, done.stderr), (0, ""), done.stdout)
+        self.assertEqual(json.loads(done.stdout), {"base_verifies": True, "raised": self.REFUSED, "record": False,
+                                                   "vendored": []})
+
+
+class R5ReferenceMeaning(Case):
+    """Amendment 5: a reference names a record; it conveys neither identity nor attestation."""
+    BANNED = ("enforce", "guarantee", "tamper-proof", "tamperproof", "tamper proof")
+
+    def test_r5_kind_and_agent_id_are_not_covered_by_the_payload_hash_beside_the_payload_which_is(self):
+        record = self.record()
+        files = fixture("witnessed")
+        reference = self.answer(record.build_reference, files["receipt.json"], files["reading.json"], agent_id="one")
+        self.assertIs(telos_receipt.verify_receipt(reference)["match"], True)
+        for label, change in [("another kind", {"kind": "action_governed"}), ("another agent", {"agent_id": "two"}),
+                              ("both", {"kind": "anything", "agent_id": "anyone"})]:
+            with self.subTest(label):
+                other = dict(reference, **change)
+                self.assertEqual(other["integrity_hash"], reference["integrity_hash"])
+                self.assertIs(telos_receipt.verify_receipt(other)["match"], True)  # the change is not seen
+        changed = dict(reference, payload=dict(reference["payload"], record_sha256="0" * 64))
+        self.assertIs(telos_receipt.verify_receipt(changed)["match"], False)
+
+    def test_r5_the_module_and_the_readme_say_a_reference_conveys_neither_identity_nor_attestation(self):
+        record = self.record()
+        for where, text in [("module", record.__doc__), ("build_reference", record.build_reference.__doc__),
+                            ("README", readme_section())]:
+            for sentence in ("neither identity nor attestation",
+                             "`kind` and `agent_id` are not covered by the payload hash"):
+                with self.subTest(where=where, sentence=sentence):
+                    self.assertIn(sentence, flat(text))
+
+    def test_r5_every_paragraph_of_the_readme_section_is_marked_draft_and_no_public_text_uses_a_banned_word(self):
+        self.record()
+        section = readme_section()
+        prose = [block for block in re.sub(r"```.*?```", "", section, flags=re.DOTALL).split("\n\n") if block.strip()]
+        self.assertGreaterEqual(len(prose), 6)
+        for block in prose:
+            with self.subTest(block[:40]):
+                self.assertIn("DRAFT", block.strip().splitlines()[0])
+        changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+        unreleased = changelog[:changelog.index("\n## ", changelog.index("## ") + 1)]
+        lines = [line for line in unreleased.splitlines() if "record" in line.lower() or "kit" in line.lower()]
+        self.assertGreaterEqual(len(lines), 3)
+        for line in lines:
+            with self.subTest(line[:40]):
+                self.assertTrue(line.startswith("- DRAFT: "), line)
+        texts = {"README section": section, "CHANGELOG": unreleased,
+                 "record.py": (PACKAGE / "record.py").read_text(encoding="utf-8"),
+                 "_kit_vendor/__init__.py": (VENDOR / "__init__.py").read_text(encoding="utf-8"),
+                 "tools/vendor_kit_reader.py": SCRIPT.read_text(encoding="utf-8")}
+        for where, text in texts.items():
+            for word in self.BANNED:
+                with self.subTest(where=where, word=word):
+                    self.assertNotIn(word, text.lower())
+        # beside it: the same search does find such a word in a file that has one (this file's own first lines)
+        self.assertIn(self.BANNED[1], Path(__file__).read_text(encoding="utf-8").lower())
 
 
 class S9ExistingPackage(Case):

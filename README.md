@@ -137,34 +137,63 @@ DRAFT. `telos_receipt.record` reads a kit record with the kit's own reader. A ki
 `receipt.json` and, beside it, optionally `witness.json` and `reading.json`. The reader is carried in this package
 byte for byte and pinned by kit commit and file sha256; a copy that differs from the pin answers nothing but
 `kit_reader_modified`. This module needs Python 3.11 or later and a POSIX system; the rest of the package keeps
-its Python 3.10 floor.
+its Python 3.10 floor and never imports this module.
 
 ```python
 from telos_receipt.record import build_reference, check_record, check_record_dir
 
 result = check_record_dir("path/to/record")  # or check_record(receipt_bytes, witness_bytes, reading_bytes)
-if result["ok"]:
-    report = result["report"]        # the kit reader's report, unchanged
-    reader = result["kit_reader"]    # {"commit": ..., "files": {...}}: the reader that answered
+if result["ok"]:                         # the reader ran; this is not the record's authenticity
+    state = result["witness_state"]      # "WITNESSED" or "NOT_WITNESSED": the reader's own witness state
+    report = result["report"]            # the kit reader's report, unchanged
+    whose = result["pins"]               # "default": the Witness key the kit pins; "caller": a key you passed
+    reader = result["kit_reader"]        # {"commit": ..., "files": {...}}: the reader that answered
 ```
 
-DRAFT. The report is the kit reader's statement, not this package's. Its `authenticity` is `WITNESSED` only when
-the row beside the receipt carries a signature that checks under the Witness key the kit pins, for this record's
-digests; every other case is `NOT_WITNESSED` with a reason. The kit's own limits on that statement apply unchanged.
+DRAFT. `ok: true` means the reader ran, not that the record is authentic. Authenticity is the witness state only:
+`witness_state`, the state the kit reader returns beside its report. `WITNESSED` binds the supplied digests to a
+Witness signature: the row beside the receipt carries a signature that checks, under the Witness key the reader
+was given, for this record's digests. It says nothing about observed execution, about commissioning, or about
+every reading of the record. Every other case is `NOT_WITNESSED`, with the kit's reason in the report. The report
+is the kit reader's statement, not this package's, and the kit's own limits on it apply unchanged. Strings in a
+report can come from the record; treat them as data.
 
-DRAFT. Every other answer is a refusal, `{"ok": false, "reason": ...}`: `kit_reader_modified`,
-`record_unreadable`, `input_too_large` (receipt over 1,048,576 bytes, row over 4,096, reading over 32,768) or
-`pins_invalid`. Both functions run offline and start no process. `check_record_dir` writes nothing;
-`check_record` reads the bytes from a private temporary directory and removes it.
+DRAFT. `pins` in a result says whose key the row was checked under. `"default"` is the Witness key the kit pins:
+no `pins` argument, or `pins=None`, which is the same call.
+`"caller"` is a key passed as `pins=`, which exists for canary keys and tests; `WITNESSED` under caller pins says
+nothing about the kit's Witness.
+
+DRAFT. Every other answer is a refusal, `{"ok": false, "reason": ...}`, with one of seven reasons:
+`kit_reader_modified`, `record_unreadable`, `input_too_large` (receipt over 1,048,576 bytes, row over 4,096,
+reading over 32,768), `pins_invalid`, `invalid_argument` (an argument of the wrong type, or an `agent_id` that
+UTF-8 cannot carry), `reader_unavailable` (the reader could not be run to an answer: its temporary files could not
+be made, written or removed, or it raised) and `reading_invalid`. The three functions raise no exception for any
+argument value. They run offline and start no process. `check_record_dir` writes nothing; `check_record` reads
+the bytes from a private temporary directory, tries to remove it on every path, and returns a report only after
+it has seen that the directory is gone. If the directory could not be removed, the answer is
+`{"ok": false, "reason": "reader_unavailable", "residual": true}`: the bytes are still in a private directory
+under the system's temporary directory, and the answer does not name it. No other answer has a `residual` key.
+
+DRAFT. The check of the reader is latched at first use: the three reader files are hashed against the pin at the
+first call in a process, and the bytes that were hashed are the bytes that run. A later change to those files on
+disk is neither used nor detected by a running process. The reader files import only each other and a closed list
+of standard library and `cryptography` modules; an `h0a` package that is importable or already imported is never
+used, and `sys.path` is not changed. Importing those listed modules adds them to `sys.modules` as any import
+does; nothing already there is replaced or removed. Any change of reader bytes at a re-pin requires a delta
+review and refreshed oracle evidence.
 
 DRAFT. The signature check needs the `cryptography` package (the `native` extra installs it); it is imported only
-when a row reaches that check. With the reader pinned today, such a row on a machine without `cryptography`
-raises `ImportError` instead of returning a report.
+when a row reaches that check. With the reader pinned today, such a row on a machine without `cryptography` is
+refused with `reader_unavailable` instead of returning a report.
 
 DRAFT. `build_reference(receipt_bytes, reading_bytes, agent_id=...)` returns an ordinary `telos/0.1-unsigned`
-receipt of kind `kit_record_reference` whose payload is four digests: `record_schema`, `record_sha256`,
-`config_identity` and `reading_sha256` (null without a saved reading of that record). It names a record. It is
-unsigned and carries no statement about the record it names.
+receipt of kind `kit_record_reference` whose payload is four fields: `record_schema`, `record_sha256`,
+`config_identity` and `reading_sha256`. `record_sha256` and `config_identity` are the kit reader's own digests
+for the record, not digests of the receipt file. `reading_sha256` is the lowercase 64-hex sha256 of the exact
+supplied bytes of the reading, or null when no reading is passed. A reading that is passed and is not that
+record's saved reading is refused, `reading_invalid`; it is never treated as absent. A `kit_record_reference`
+conveys neither identity nor attestation: it names a record, it is unsigned, it carries no statement about the
+record it names, and `kind` and `agent_id` are not covered by the payload hash.
 
 ## Related TELOS packages
 
