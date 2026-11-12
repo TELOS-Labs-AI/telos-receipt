@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "telos-receipt"
-version = "0.1.1"
+version = "0.2.0.dev0"
 description = "The canonical unsigned integrity-hash receipt contract for TELOS AI Labs: one envelope both the trust surface and the MCP governance server speak. Optional native-v2 byte-integrity verification."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -50,12 +50,12 @@ packages = ["telos_receipt"]
 # hatchling falls back to gitignore-based selection and an untracked workspace
 # (venvs, caches, scratch files) gets swept into the published sdist.
 [tool.hatch.build.targets.sdist]
-only-include = ["telos_receipt", "README.md", "LICENSE", "NOTICE", "CHANGELOG.md", "tests", "pyproject.toml"]
+only-include = ["telos_receipt", "README.md", "LICENSE", "NOTICE", "CHANGELOG.md", "tests", "tools", "pyproject.toml"]
 
 [tool.ruff]
 line-length = 120
 target-version = "py310"
-extend-exclude = ["mutants"]
+extend-exclude = ["mutants", "telos_receipt/_kit_vendor"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
