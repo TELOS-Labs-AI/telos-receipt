@@ -5,7 +5,10 @@ for this record: the row has the contract's shape, its hash is recomputed here, 
 public key pinned below, and its digest and configuration identity are this receipt's. The check is offline. The
 row's time is the signer's statement, and the Witness received digests, not the record: this does not show that TELOS
 observed the run.
-Every other case is NOT_WITNESSED with one reason from REASONS.
+Every other case is NOT_WITNESSED with one reason from REASONS. The last of them, WITNESS_VERIFIER_UNAVAILABLE, is
+about this machine and this moment, not about the record: the signature check could not be run here (`cryptography`
+is not installed, or it raised something that is not a plain invalid-signature result). It is never read from
+`witness.json` and never written there, and a row that is there is left as it is.
 
 `record()` asks for the row: one HTTP POST of three values (the record schema name, the receipt's runtime digest and
 its configuration identity), and a fourth, the sha256 of the bytes of the `reading.json` beside the receipt, when
@@ -17,11 +20,13 @@ address is this machine. The call is made by a child process, this file run as a
 child holds only those values, the launcher's offline guard stays installed in the parent, and the parent stops
 the child at BUDGET_SECONDS, which makes the budget a total one. What comes back is judged by the same `check()` the
 reader uses, and `witness.json` then holds either the signed row or `{"reason": ..., "state": "NOT_WITNESSED"}`, so
-a later read names why. A record that is already WITNESSED is not asked about again.
+a later read names why. A record that is already WITNESSED is not asked about again. When the check cannot be run
+here nothing is written: the import is tried before the request, so nothing is asked when it fails, and an answer
+that then cannot be checked is not kept.
 
 Standard library only, with no import from the kit but the sibling reading module, loaded by its path when the
 package is not there, so the standalone reader can load this file by its path. The signature check imports
-`cryptography`, and only when there is a row to check.
+`cryptography`, in one place (`_verified`), when there is a row to check or a request about to be made.
 """
 import argparse
 import base64
@@ -61,7 +66,8 @@ ENVELOPE_FIELDS = frozenset({'algorithm', 'covers', 'signer_key_id', 'value'})
 COVERS = 'this_hash (ASCII bytes of the 64-character hex string)'
 REFUSAL = b'{"error":"witness_unavailable"}'
 REASONS = ('WITNESS_NOT_REQUESTED', 'WITNESS_UNREACHABLE', 'WITNESS_REFUSED', 'WITNESS_FILE_INVALID',
-           'WITNESS_NOT_THIS_RECORD')
+           'WITNESS_NOT_THIS_RECORD', 'WITNESS_VERIFIER_UNAVAILABLE')
+UNAVAILABLE = REASONS[-1]  # a condition of this machine now: computed at each read, never stored (REASONS[1:-1] are)
 MAX_RECEIPT_BYTES = 1048576  # h0a.receipt.MAX_BYTES
 MAX_ROW_BYTES = 4096
 BUDGET_SECONDS = 5
@@ -134,22 +140,45 @@ def _timestamp(value):
     return True
 
 
-def _signed(value, this_hash, public_key):
-    """True when `value` is the canonical base64 of an Ed25519 signature by public_key over this_hash's ASCII bytes."""
-    from cryptography.exceptions import InvalidSignature
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+class VerifierUnavailable(Exception):
+    """This machine could not run the Ed25519 check: it says nothing about the signature."""
+
+
+def _verified(signature, message, public_key):
+    """True when `signature` is an Ed25519 signature by public_key (hex) over message, False when it is not. With
+    signature None nothing is checked and True says the verifier could be imported.
+    The one place the verifier is imported and run. ValueError and InvalidSignature from the check are the plain
+    not-signed result. Anything else the import or the check raises is VerifierUnavailable."""
     try:
-        signature = base64.b64decode(value, validate=True)
-        if base64.b64encode(signature).decode('ascii') != value:
+        from cryptography.exceptions import InvalidSignature
+        from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+        if signature is None:
+            return True
+        try:
+            Ed25519PublicKey.from_public_bytes(bytes.fromhex(public_key)).verify(signature, message)
+        except (ValueError, InvalidSignature):
             return False
-        Ed25519PublicKey.from_public_bytes(bytes.fromhex(public_key)).verify(signature, this_hash.encode('ascii'))
-    except (ValueError, InvalidSignature):
-        return False
+    except Exception:
+        raise VerifierUnavailable() from None
     return True
 
 
+def _signed(value, this_hash, public_key):
+    """True when `value` is the canonical base64 of an Ed25519 signature by public_key over this_hash's ASCII bytes.
+    A value that is not canonical base64 is not signed, and the verifier is not touched for it."""
+    try:
+        signature = base64.b64decode(value, validate=True)
+    except ValueError:
+        return False
+    if base64.b64encode(signature).decode('ascii') != value:
+        return False
+    return _verified(signature, this_hash.encode('ascii'), public_key)
+
+
 def _row_valid(row, pins):
-    """True when `row` is one contract row, anchored and signed as pinned. Says nothing about which record it is for."""
+    """True when `row` is one contract row, anchored and signed as pinned. Says nothing about which record it is for.
+    The shape is checked first, so a row that is not a contract row is False whether or not the signature check can
+    be run; VerifierUnavailable is raised only for a row that reaches that check."""
     if type(row) is not dict or row.get('schema_version') not in (ROW_SCHEMA, ROW_SCHEMA_READING):
         return False
     names_reading = row['schema_version'] == ROW_SCHEMA_READING
@@ -182,9 +211,13 @@ def _checked(receipt_raw, witness_raw, pins):
     except (ValueError, RecursionError):
         found = None
     if (type(found) is dict and set(found) == {'state', 'reason'} and found['state'] == 'NOT_WITNESSED'
-            and found['reason'] in REASONS[1:]):
-        return _not(found['reason']), None  # what an earlier request recorded
-    if not _row_valid(found, pins):
+            and found['reason'] in REASONS[1:-1]):
+        return _not(found['reason']), None  # what an earlier request recorded; UNAVAILABLE is never one of them
+    try:
+        valid = _row_valid(found, pins)
+    except VerifierUnavailable:
+        return _not(UNAVAILABLE), None
+    if not valid:
         return _not('WITNESS_FILE_INVALID'), None
     if _identity(receipt_raw) != (found['record_sha256'], found['config_identity']):
         return _not('WITNESS_NOT_THIS_RECORD'), None
@@ -195,7 +228,8 @@ def _checked(receipt_raw, witness_raw, pins):
 def check(receipt_raw, witness_raw, *, pins=PINS):
     """The witness state of receipt bytes and the bytes of the witness.json beside them (None when there is none):
     {'authenticity': 'WITNESSED', 'witness': {key_fingerprint, row, timestamp}, 'reason': None}, or
-    {'authenticity': 'NOT_WITNESSED', 'witness': None, 'reason': one of REASONS}. A row of either schema is accepted."""
+    {'authenticity': 'NOT_WITNESSED', 'witness': None, 'reason': one of REASONS}. A row of either schema is accepted.
+    It does not raise when the signature check cannot be run here: the reason is then WITNESS_VERIFIER_UNAVAILABLE."""
     return _checked(receipt_raw, witness_raw, pins)[0]
 
 
@@ -272,12 +306,21 @@ def _write(path, raw):
 
 def record(record_dir, *, url=WITNESS_URL, pins=PINS):
     """Ask the witness to sign this record's digest, keep the outcome in witness.json, and return the state a reader
-    of the directory now gets. It never raises for a witness or file failure and never writes receipt.json."""
+    of the directory now gets. It never raises for a witness or file failure and never writes receipt.json.
+    When the signature check cannot be run here it returns WITNESS_VERIFIER_UNAVAILABLE and writes nothing: a row
+    already in witness.json is left as it is and nothing is asked; with no row the import is tried before the
+    request, and nothing is asked when it fails; an answer that then cannot be checked is not kept."""
     receipt_raw = load(os.path.join(record_dir, RECEIPT), MAX_RECEIPT_BYTES)
     state = check(receipt_raw, load(os.path.join(record_dir, WITNESS), MAX_ROW_BYTES), pins=pins)
     request = request_bytes(receipt_raw, load(os.path.join(record_dir, READING), MAX_READING_BYTES))
     if state['authenticity'] == 'WITNESSED' or request is None:
         return state
+    if state['reason'] == UNAVAILABLE:  # a row is here that this machine cannot check: not asked about, not replaced
+        return state
+    try:
+        _verified(None, None, None)  # before asking: an answer that could not be checked would be no use here
+    except VerifierUnavailable:
+        return _not(UNAVAILABLE)
     answer = _ask(url, request)
     if answer is None:
         outcome = _not('WITNESS_UNREACHABLE')
@@ -285,6 +328,8 @@ def record(record_dir, *, url=WITNESS_URL, pins=PINS):
         outcome = _not('WITNESS_REFUSED')
     else:
         outcome = check(receipt_raw, answer, pins=pins)
+    if outcome['reason'] == UNAVAILABLE:  # the verifier failed at the check itself: the answer is not kept
+        return outcome
     kept = json.loads(answer) if outcome['reason'] is None else {'state': 'NOT_WITNESSED', 'reason': outcome['reason']}
     try:
         _write(os.path.join(record_dir, WITNESS), _canonical(kept) + b'\n')
@@ -317,7 +362,8 @@ def sentence(state):
 
 def main(argv):
     """python -I run_h1r.py witness <record-dir> [--witness-url URL]: one JSON object on stdout, the sentence on
-    stderr. Exit 0 WITNESSED, 1 NOT_WITNESSED, 2 usage or a directory with no readable receipt.json."""
+    stderr. Exit 0 WITNESSED, 1 NOT_WITNESSED (WITNESS_VERIFIER_UNAVAILABLE among its reasons: nothing was kept),
+    2 usage or a directory with no readable receipt.json."""
     parser = argparse.ArgumentParser(prog='run_h1r.py witness')
     parser.add_argument('record_dir')
     parser.add_argument('--witness-url', default=default_url())

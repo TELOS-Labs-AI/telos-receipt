@@ -11,6 +11,11 @@ report also carries `reading`: {"state": ...}, the state of the reading.json bes
 which is READING_WITNESSED only when this record's Witness row names the digest of that file's bytes. Errors are the
 reader's own reason phrases; an error Python raises while reading the record is reported as 'malformed record',
 never its message.
+
+The command: python -I h0a/receipt.py [--require-witnessed] <receipt.json>. It exits 0 when the structure is VALID
+and 2 otherwise (INVALID, an unreadable receipt, or any other argument shape). With --require-witnessed, given
+first, it exits 0 only when the structure is VALID and the record is WITNESSED, 1 when the structure is VALID and
+the record is NOT_WITNESSED, and 2 as before. The flag changes the exit code only: stdout and stderr are the same.
 """
 from datetime import datetime, timezone
 import hashlib
@@ -28,6 +33,7 @@ except ImportError:  # run as a script under -I: the script directory is not on 
 PROFILE='h0a/read-excerpt-v1'
 MAX_BYTES=1048576
 MALFORMED='malformed record'
+REQUIRE_WITNESSED='--require-witnessed'  # the command's one flag: NOT_WITNESSED then exits 1
 
 
 class _Refused(ValueError):
@@ -302,12 +308,15 @@ def explain(raw,state=witness.NOT_REQUESTED):
 
 
 if __name__=='__main__':
+    require=sys.argv[1:2]==[REQUIRE_WITNESSED]
+    paths=sys.argv[2:] if require else sys.argv[1:]
     state=witness.NOT_REQUESTED
     unread=dict({'structure':'INVALID','coverage':'UNKNOWN'},**witness.fields(state))
-    if len(sys.argv)!=2:result=dict(unread,errors=['usage'])
+    if len(paths)!=1:result=dict(unread,errors=['usage'])
     else:
-        try:result,state=check_record(sys.argv[1])
+        try:result,state=check_record(paths[0])
         except OSError:result=dict(unread,errors=['receipt unreadable'])
     print(json.dumps(result,sort_keys=True))
     print(witness.sentence(state),file=sys.stderr)
-    sys.exit(0 if result['structure']=='VALID' else 2)
+    if result['structure']!='VALID':sys.exit(2)
+    sys.exit(1 if require and state['reason'] is not None else 0)

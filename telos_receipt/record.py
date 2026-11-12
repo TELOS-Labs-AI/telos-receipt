@@ -106,11 +106,11 @@ __all__ = ["KIT_COMMIT", "KIT_FILES", "REASONS", "REFERENCE_KIND", "Pins", "buil
            "check_record_dir"]
 
 # --- kit reader pin: written by tools/vendor_kit_reader.py, never by hand ---
-KIT_COMMIT = "64dfcef2bbe8ac411d98841ab1216ed4852a33e9"
+KIT_COMMIT = "15cc2ebd5d76702c181487ea8b80a4ee786d068e"
 KIT_FILES = {
     "h0a/reading.py": "cf38de959154c70fc1dab3073975d0c9b26ce232d35d15e81d6696729bc38178",
-    "h0a/receipt.py": "c7a73c6f20b434b42512aa4a0a0149f06e823fc4dc1f23c429b758548deac439",
-    "h0a/witness.py": "88f59d68d13bcca9be19e83f2240eedef71e4e3e7b86514ea57d97d48d22772e",
+    "h0a/receipt.py": "ac4b676acdc6b812185688494c42dd991b44c5170a560897a948e32a0bbee53c",
+    "h0a/witness.py": "1727f6b6ac9a9e59f7ed6a03ea122c8b0b50f29670902f2881e0c54b65d4f2bb",
 }
 # --- end kit reader pin ---
 
