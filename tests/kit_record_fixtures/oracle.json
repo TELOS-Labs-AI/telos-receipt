@@ -1,0 +1,410 @@
+{
+ "canary_pins": {
+  "anchor": "079f9848cbcf93bee13276cc3acc1f03137ad1666d8c5968eb2dea0bcafec9a9",
+  "fingerprint": "1e10679285ded12b832bde6941cc272ff686709a885fa016a158d6696d4e8814",
+  "public_key": "a96568360eb0cd702d6676585dab2070ad906f6f9aa149e1103b995202d52e0f"
+ },
+ "fixtures": {
+  "not_witnessed": {
+   "canary_pins": {
+    "authenticity": "NOT_WITNESSED",
+    "coverage": "COMPLETE_FOR_DECLARED_PROFILE",
+    "coverage_gaps": [],
+    "errors": [],
+    "human_review": "MISSING",
+    "identity_assurance": "local-operator-asserted",
+    "reading": {
+     "state": "READING_SAVED"
+    },
+    "structure": "VALID",
+    "unknown_outcomes": [],
+    "witness_reason": "WITNESS_NOT_REQUESTED"
+   },
+   "files": [
+    "receipt.json",
+    "reading.json"
+   ],
+   "kit_request": {
+    "config_identity": "722c06e7ed274ee5034645f3ff4ceb2bbaeb92a611837e3ca58d661dbc7b8472",
+    "reading_sha256": "682214ecc37543a425010f25dbcccb092bc8773d5212c693339fc1dc56d24112",
+    "record_schema": "h0a.receipt/1",
+    "record_sha256": "936f643ea57e0abd6bc02242446dfe846b5764540f80f22d258dc08841969725"
+   },
+   "pinned_key_cli": {
+    "authenticity": "NOT_WITNESSED",
+    "coverage": "COMPLETE_FOR_DECLARED_PROFILE",
+    "coverage_gaps": [],
+    "errors": [],
+    "human_review": "MISSING",
+    "identity_assurance": "local-operator-asserted",
+    "reading": {
+     "state": "READING_SAVED"
+    },
+    "structure": "VALID",
+    "unknown_outcomes": [],
+    "witness_reason": "WITNESS_NOT_REQUESTED"
+   },
+   "pinned_key_cli_exit": 0
+  },
+  "refused": {
+   "canary_pins": {
+    "authenticity": "NOT_WITNESSED",
+    "coverage": "COMPLETE_FOR_DECLARED_PROFILE",
+    "coverage_gaps": [],
+    "errors": [],
+    "human_review": "MISSING",
+    "identity_assurance": "local-operator-asserted",
+    "reading": {
+     "state": "READING_SAVED"
+    },
+    "structure": "VALID",
+    "unknown_outcomes": [],
+    "witness_reason": "WITNESS_REFUSED"
+   },
+   "files": [
+    "receipt.json",
+    "witness.json",
+    "reading.json"
+   ],
+   "kit_request": {
+    "config_identity": "722c06e7ed274ee5034645f3ff4ceb2bbaeb92a611837e3ca58d661dbc7b8472",
+    "reading_sha256": "dfbb64b38c50c62eed03342d5b31d632f92d9a6e0c2d1a92a5ca3b6657a9bc52",
+    "record_schema": "h0a.receipt/1",
+    "record_sha256": "e39b62fd48850d033178a4210c35e7602209799466635d5952aecbb23df16829"
+   },
+   "pinned_key_cli": {
+    "authenticity": "NOT_WITNESSED",
+    "coverage": "COMPLETE_FOR_DECLARED_PROFILE",
+    "coverage_gaps": [],
+    "errors": [],
+    "human_review": "MISSING",
+    "identity_assurance": "local-operator-asserted",
+    "reading": {
+     "state": "READING_SAVED"
+    },
+    "structure": "VALID",
+    "unknown_outcomes": [],
+    "witness_reason": "WITNESS_REFUSED"
+   },
+   "pinned_key_cli_exit": 0
+  },
+  "witnessed": {
+   "canary_pins": {
+    "authenticity": "WITNESSED",
+    "coverage": "COMPLETE_FOR_DECLARED_PROFILE",
+    "coverage_gaps": [],
+    "errors": [],
+    "human_review": "MISSING",
+    "identity_assurance": "local-operator-asserted",
+    "reading": {
+     "state": "READING_WITNESSED"
+    },
+    "structure": "VALID",
+    "unknown_outcomes": [],
+    "witness": {
+     "key_fingerprint": "1e10679285ded12b832bde6941cc272ff686709a885fa016a158d6696d4e8814",
+     "row": 7,
+     "timestamp": "2026-11-12T02:39:10Z"
+    }
+   },
+   "files": [
+    "receipt.json",
+    "witness.json",
+    "reading.json"
+   ],
+   "kit_request": {
+    "config_identity": "722c06e7ed274ee5034645f3ff4ceb2bbaeb92a611837e3ca58d661dbc7b8472",
+    "reading_sha256": "4bd6dee1736d9d62eedf8627947dea01d149bba81cc7f13ca0ac79939563cb6a",
+    "record_schema": "h0a.receipt/1",
+    "record_sha256": "3f7523133606ae7500bebe4ab4e90ce5aa39d0340d914da008544bb2367e07bf"
+   },
+   "pinned_key_cli": {
+    "authenticity": "NOT_WITNESSED",
+    "coverage": "COMPLETE_FOR_DECLARED_PROFILE",
+    "coverage_gaps": [],
+    "errors": [],
+    "human_review": "MISSING",
+    "identity_assurance": "local-operator-asserted",
+    "reading": {
+     "state": "READING_SAVED"
+    },
+    "structure": "VALID",
+    "unknown_outcomes": [],
+    "witness_reason": "WITNESS_FILE_INVALID"
+   },
+   "pinned_key_cli_exit": 0,
+   "request_the_stub_received": {
+    "config_identity": "722c06e7ed274ee5034645f3ff4ceb2bbaeb92a611837e3ca58d661dbc7b8472",
+    "reading_sha256": "4bd6dee1736d9d62eedf8627947dea01d149bba81cc7f13ca0ac79939563cb6a",
+    "record_schema": "h0a.receipt/1",
+    "record_sha256": "3f7523133606ae7500bebe4ab4e90ce5aa39d0340d914da008544bb2367e07bf"
+   }
+  }
+ },
+ "kit_commit": "64dfcef2bbe8ac411d98841ab1216ed4852a33e9",
+ "note": "canary_pins: the kit reader check_record(path, pins=<canary>) printed with the reader command's own json.dumps(report, sort_keys=True). pinned_key_cli: the line the kit reader command (python -I h0a/receipt.py <receipt.json>) printed, which checks under the pinned Witness key. The canary private key was held in memory only and is gone.",
+ "variants": [
+  {
+   "base": "witnessed",
+   "canary_pins": {
+    "authenticity": "NOT_WITNESSED",
+    "coverage": "UNKNOWN",
+    "coverage_gaps": [],
+    "errors": [
+     "runtime integrity mismatch"
+    ],
+    "human_review": "MISSING",
+    "identity_assurance": "unverified",
+    "reading": {
+     "state": "READING_SAVED"
+    },
+    "structure": "INVALID",
+    "unknown_outcomes": [],
+    "witness_reason": "WITNESS_NOT_THIS_RECORD"
+   },
+   "edits": [
+    {
+     "file": "receipt.json",
+     "new": 115,
+     "offset": 341,
+     "old": 114
+    }
+   ],
+   "name": "receipt_byte",
+   "pinned_key_cli": {
+    "authenticity": "NOT_WITNESSED",
+    "coverage": "UNKNOWN",
+    "coverage_gaps": [],
+    "errors": [
+     "runtime integrity mismatch"
+    ],
+    "human_review": "MISSING",
+    "identity_assurance": "unverified",
+    "reading": {
+     "state": "READING_SAVED"
+    },
+    "structure": "INVALID",
+    "unknown_outcomes": [],
+    "witness_reason": "WITNESS_FILE_INVALID"
+   },
+   "pinned_key_cli_exit": 2,
+   "take": []
+  },
+  {
+   "base": "witnessed",
+   "canary_pins": {
+    "authenticity": "NOT_WITNESSED",
+    "coverage": "COMPLETE_FOR_DECLARED_PROFILE",
+    "coverage_gaps": [],
+    "errors": [],
+    "human_review": "MISSING",
+    "identity_assurance": "local-operator-asserted",
+    "reading": {
+     "state": "READING_SAVED"
+    },
+    "structure": "VALID",
+    "unknown_outcomes": [],
+    "witness_reason": "WITNESS_FILE_INVALID"
+   },
+   "edits": [
+    {
+     "file": "witness.json",
+     "new": 51,
+     "offset": 979,
+     "old": 50
+    }
+   ],
+   "name": "row_byte",
+   "pinned_key_cli": {
+    "authenticity": "NOT_WITNESSED",
+    "coverage": "COMPLETE_FOR_DECLARED_PROFILE",
+    "coverage_gaps": [],
+    "errors": [],
+    "human_review": "MISSING",
+    "identity_assurance": "local-operator-asserted",
+    "reading": {
+     "state": "READING_SAVED"
+    },
+    "structure": "VALID",
+    "unknown_outcomes": [],
+    "witness_reason": "WITNESS_FILE_INVALID"
+   },
+   "pinned_key_cli_exit": 0,
+   "take": []
+  },
+  {
+   "base": "witnessed",
+   "canary_pins": {
+    "authenticity": "NOT_WITNESSED",
+    "coverage": "COMPLETE_FOR_DECLARED_PROFILE",
+    "coverage_gaps": [],
+    "errors": [],
+    "human_review": "MISSING",
+    "identity_assurance": "local-operator-asserted",
+    "reading": {
+     "state": "READING_SAVED"
+    },
+    "structure": "VALID",
+    "unknown_outcomes": [],
+    "witness_reason": "WITNESS_FILE_INVALID"
+   },
+   "edits": [
+    {
+     "file": "witness.json",
+     "new": 65,
+     "offset": 801,
+     "old": 87
+    }
+   ],
+   "name": "signature_byte",
+   "pinned_key_cli": {
+    "authenticity": "NOT_WITNESSED",
+    "coverage": "COMPLETE_FOR_DECLARED_PROFILE",
+    "coverage_gaps": [],
+    "errors": [],
+    "human_review": "MISSING",
+    "identity_assurance": "local-operator-asserted",
+    "reading": {
+     "state": "READING_SAVED"
+    },
+    "structure": "VALID",
+    "unknown_outcomes": [],
+    "witness_reason": "WITNESS_FILE_INVALID"
+   },
+   "pinned_key_cli_exit": 0,
+   "take": []
+  },
+  {
+   "base": "witnessed",
+   "canary_pins": {
+    "authenticity": "WITNESSED",
+    "coverage": "COMPLETE_FOR_DECLARED_PROFILE",
+    "coverage_gaps": [],
+    "errors": [],
+    "human_review": "MISSING",
+    "identity_assurance": "local-operator-asserted",
+    "reading": {
+     "state": "READING_CHANGED"
+    },
+    "structure": "VALID",
+    "unknown_outcomes": [],
+    "witness": {
+     "key_fingerprint": "1e10679285ded12b832bde6941cc272ff686709a885fa016a158d6696d4e8814",
+     "row": 7,
+     "timestamp": "2026-11-12T02:39:10Z"
+    }
+   },
+   "edits": [
+    {
+     "file": "reading.json",
+     "new": 120,
+     "offset": 174,
+     "old": 84
+    }
+   ],
+   "name": "reading_byte",
+   "pinned_key_cli": {
+    "authenticity": "NOT_WITNESSED",
+    "coverage": "COMPLETE_FOR_DECLARED_PROFILE",
+    "coverage_gaps": [],
+    "errors": [],
+    "human_review": "MISSING",
+    "identity_assurance": "local-operator-asserted",
+    "reading": {
+     "state": "READING_SAVED"
+    },
+    "structure": "VALID",
+    "unknown_outcomes": [],
+    "witness_reason": "WITNESS_FILE_INVALID"
+   },
+   "pinned_key_cli_exit": 0,
+   "take": []
+  },
+  {
+   "base": "not_witnessed",
+   "canary_pins": {
+    "authenticity": "NOT_WITNESSED",
+    "coverage": "UNKNOWN",
+    "coverage_gaps": [],
+    "errors": [
+     "runtime integrity mismatch"
+    ],
+    "human_review": "MISSING",
+    "identity_assurance": "unverified",
+    "reading": {
+     "state": "READING_SAVED"
+    },
+    "structure": "INVALID",
+    "unknown_outcomes": [],
+    "witness_reason": "WITNESS_NOT_REQUESTED"
+   },
+   "edits": [
+    {
+     "file": "receipt.json",
+     "new": 115,
+     "offset": 341,
+     "old": 114
+    }
+   ],
+   "name": "receipt_byte_no_row",
+   "pinned_key_cli": {
+    "authenticity": "NOT_WITNESSED",
+    "coverage": "UNKNOWN",
+    "coverage_gaps": [],
+    "errors": [
+     "runtime integrity mismatch"
+    ],
+    "human_review": "MISSING",
+    "identity_assurance": "unverified",
+    "reading": {
+     "state": "READING_SAVED"
+    },
+    "structure": "INVALID",
+    "unknown_outcomes": [],
+    "witness_reason": "WITNESS_NOT_REQUESTED"
+   },
+   "pinned_key_cli_exit": 2,
+   "take": []
+  },
+  {
+   "base": "not_witnessed",
+   "canary_pins": {
+    "authenticity": "NOT_WITNESSED",
+    "coverage": "COMPLETE_FOR_DECLARED_PROFILE",
+    "coverage_gaps": [],
+    "errors": [],
+    "human_review": "MISSING",
+    "identity_assurance": "local-operator-asserted",
+    "reading": {
+     "state": "READING_SAVED"
+    },
+    "structure": "VALID",
+    "unknown_outcomes": [],
+    "witness_reason": "WITNESS_NOT_THIS_RECORD"
+   },
+   "edits": [],
+   "name": "row_of_another_record",
+   "pinned_key_cli": {
+    "authenticity": "NOT_WITNESSED",
+    "coverage": "COMPLETE_FOR_DECLARED_PROFILE",
+    "coverage_gaps": [],
+    "errors": [],
+    "human_review": "MISSING",
+    "identity_assurance": "local-operator-asserted",
+    "reading": {
+     "state": "READING_SAVED"
+    },
+    "structure": "VALID",
+    "unknown_outcomes": [],
+    "witness_reason": "WITNESS_FILE_INVALID"
+   },
+   "pinned_key_cli_exit": 0,
+   "take": [
+    {
+     "file": "witness.json",
+     "from": "witnessed"
+    }
+   ]
+  }
+ ]
+}
