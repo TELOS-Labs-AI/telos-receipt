@@ -29,3 +29,12 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
+
+DRAFT (0.2.0.dev0; wording and terms not final): telos-receipt kit reader
+
+The _kit_vendor/receipt.py, _kit_vendor/witness.py and _kit_vendor/reading.py
+modules are byte-for-byte copies of h0a/receipt.py, h0a/witness.py and
+h0a/reading.py of the TELOS kit at commit
+64dfcef2bbe8ac411d98841ab1216ed4852a33e9. Their sha256 digests are pinned in
+telos_receipt/record.py and written by tools/vendor_kit_reader.py. The terms
+under which these three files are distributed here are to be stated at release.

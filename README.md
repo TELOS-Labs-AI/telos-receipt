@@ -130,6 +130,42 @@ does not establish authenticity.
 the same JSON result (exit 0 for `PASS`, 1 for `FAIL`, 2 for `UNAVAILABLE`).
 Vendored verifier attribution and the MIT permission notice are in `NOTICE`.
 
+<!-- DRAFT (0.2.0.dev0): every line of the section below is draft wording, not final until release review. -->
+## Reading a kit record (DRAFT)
+
+DRAFT. `telos_receipt.record` reads a kit record with the kit's own reader. A kit record is a directory holding
+`receipt.json` and, beside it, optionally `witness.json` and `reading.json`. The reader is carried in this package
+byte for byte and pinned by kit commit and file sha256; a copy that differs from the pin answers nothing but
+`kit_reader_modified`. This module needs Python 3.11 or later and a POSIX system; the rest of the package keeps
+its Python 3.10 floor.
+
+```python
+from telos_receipt.record import build_reference, check_record, check_record_dir
+
+result = check_record_dir("path/to/record")  # or check_record(receipt_bytes, witness_bytes, reading_bytes)
+if result["ok"]:
+    report = result["report"]        # the kit reader's report, unchanged
+    reader = result["kit_reader"]    # {"commit": ..., "files": {...}}: the reader that answered
+```
+
+DRAFT. The report is the kit reader's statement, not this package's. Its `authenticity` is `WITNESSED` only when
+the row beside the receipt carries a signature that checks under the Witness key the kit pins, for this record's
+digests; every other case is `NOT_WITNESSED` with a reason. The kit's own limits on that statement apply unchanged.
+
+DRAFT. Every other answer is a refusal, `{"ok": false, "reason": ...}`: `kit_reader_modified`,
+`record_unreadable`, `input_too_large` (receipt over 1,048,576 bytes, row over 4,096, reading over 32,768) or
+`pins_invalid`. Both functions run offline and start no process. `check_record_dir` writes nothing;
+`check_record` reads the bytes from a private temporary directory and removes it.
+
+DRAFT. The signature check needs the `cryptography` package (the `native` extra installs it); it is imported only
+when a row reaches that check. With the reader pinned today, such a row on a machine without `cryptography`
+raises `ImportError` instead of returning a report.
+
+DRAFT. `build_reference(receipt_bytes, reading_bytes, agent_id=...)` returns an ordinary `telos/0.1-unsigned`
+receipt of kind `kit_record_reference` whose payload is four digests: `record_schema`, `record_sha256`,
+`config_identity` and `reading_sha256` (null without a saved reading of that record). It names a record. It is
+unsigned and carries no statement about the record it names.
+
 ## Related TELOS packages
 
 - [telos-mcp](https://github.com/TELOS-Labs-AI/telos-mcp): MCP tools using this receipt contract.
