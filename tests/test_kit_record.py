@@ -24,6 +24,14 @@ R3/A2.2 one closed tuple of refusal reasons, no exception, and no report while t
 R4 the base package never imports this module; below 3.11 the module raises its one line.
 R5 what a reference does not convey, and the DRAFT marking of the public text.
 
+Amendment 6 (class A6FailedRead and the tests named test_a6_2_*):
+S15/A6.1 an OSError opening or reading a vendored reader file is `reader_unavailable` for that call and is not
+   latched: the next call takes all three files again. A real byte mismatch is `kit_reader_modified` and stays so.
+   The faults are put on `open` inside a fresh interpreter, for that interpreter's vendored paths only; real byte
+   changes are made in a temporary copy of the package. The vendored files of this tree are never written.
+S16/A6.2 a process-control exception propagates; the removal of the temporary directory is attempted, and when
+   that also fails the directory is left and nothing is returned. Argument-binding errors are Python's own.
+
 The fixtures under kit_record_fixtures/ were made once by the kit's own entry points with a loopback stub Witness
 and a canary Ed25519 key that was never written to disk. `oracle.json` holds the canary PUBLIC pins and what the
 kit reader answered for every fixture and every changed directory: `canary_pins` is the kit's
@@ -386,6 +394,108 @@ print(json.dumps(out))
 '''
 
 
+# Runs in a fresh interpreter (A6.1). Takes steps in order and prints, for each "call" step, what the one public
+# function answered, which vendored files were opened since the call before, and whether anything is latched.
+#   ["fault", file, "open" | "read"]   from now on opening that vendored file, or reading it once open, is an OSError
+#   ["clear"]                          no fault from now on
+#   ["flip", file] / ["remove", file]  one byte of the file changes on disk / the file is unlinked: copies only
+#   ["restore", file]                  the file is on disk again with the bytes it had
+#   ["call"]                           the public function named in the spec, once
+S15_PROBE = r'''
+import builtins, json, os, sys
+spec = json.loads(sys.argv[1])
+sys.path[:0] = spec["path"]
+import telos_receipt.record as record
+vendor = os.path.join(os.path.dirname(os.path.abspath(record.__file__)), "_kit_vendor")
+real_open = builtins.open
+faults, opens, held, out = {}, {}, {}, []
+fresh = not record._LOADED and not record._OUTSIDE  # nothing loaded, nothing latched, before the first step
+
+
+class Unreadable:
+    def __init__(self, stream):
+        self.stream = stream
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.stream.close()
+        return False
+
+    def read(self, *args):
+        raise OSError(5, "Input/output error")
+
+
+def faulty(file, *args, **kwargs):
+    if isinstance(file, (str, bytes, os.PathLike)):
+        path = os.path.abspath(os.fsdecode(file))
+        if os.path.dirname(path) == vendor:  # this interpreter's vendored reader files, and nothing else
+            name = os.path.basename(path)
+            opens[name] = opens.get(name, 0) + 1
+            if faults.get(name) == "open":
+                raise OSError(5, "Input/output error", path)
+            if faults.get(name) == "read":
+                return Unreadable(real_open(file, *args, **kwargs))
+    return real_open(file, *args, **kwargs)
+
+
+builtins.open = faulty
+
+
+def raw(name):
+    try:
+        with real_open(os.path.join(spec["record"], name), "rb") as stream:
+            return stream.read()
+    except FileNotFoundError:
+        return None
+
+
+def call():
+    pins = record.Pins(**spec["pins"])
+    if spec["function"] == "check_record_dir":
+        return record.check_record_dir(spec["record"], pins=pins)
+    if spec["function"] == "check_record":
+        return record.check_record(raw("receipt.json"), raw("witness.json"), raw("reading.json"), pins=pins)
+    return record.build_reference(raw("receipt.json"), raw("reading.json"), agent_id="probe-agent")
+
+
+def on_disk(name):
+    path = os.path.join(vendor, name)
+    if not spec.get("copy") or not path.startswith(os.path.join(spec["copy"], "")):
+        raise SystemExit("this probe changes vendored files in a temporary copy only")
+    return path
+
+
+for step in spec["steps"]:
+    if step[0] == "fault":
+        faults[step[1]] = step[2]
+    elif step[0] == "clear":
+        faults.clear()
+    elif step[0] in ("flip", "remove"):
+        with real_open(on_disk(step[1]), "rb") as stream:
+            held[step[1]] = stream.read()
+        if step[0] == "remove":
+            os.unlink(on_disk(step[1]))
+        else:
+            data = bytearray(held[step[1]])
+            data[4] ^= 0x01
+            with real_open(on_disk(step[1]), "wb") as stream:
+                stream.write(bytes(data))
+    elif step[0] == "restore":
+        with real_open(on_disk(step[1]), "wb") as stream:
+            stream.write(held[step[1]])
+    else:
+        try:
+            answer = call()
+        except BaseException as e:
+            answer = {"raised": [type(e).__name__, str(e)]}
+        out.append({"answer": answer, "opened": dict(opens), "latched": bool(record._LOADED)})
+        opens.clear()
+print(json.dumps({"fresh": fresh, "calls": out}))
+'''
+
+
 class S1SameAnswerAsTheKitReader(Case):
     def test_s1_both_functions_return_the_kit_readers_report_under_the_canary_pins(self):
         states = set()
@@ -653,13 +763,23 @@ class S3PinnedReader(Case):
                 Path(path).write_bytes(bytes(data))
                 self.assertEqual(self.calls(parent), [(MODIFIED, MODIFIED, MODIFIED)] * 2)
 
-    def test_s3_a_vendored_file_that_is_gone_refuses_every_call_beside_the_intact_files(self):
-        self.assertIs(self.calls(self.copy_package("intact"))[0][0]["ok"], True)
+    def test_s3_a_vendored_file_that_is_gone_is_reader_unavailable_until_it_is_back_beside_the_intact_files(self):
+        # A6.1: a file that cannot be opened was not read, so nothing was measured: `reader_unavailable`, not latched
+        intact = self.calls(self.copy_package("intact"))
+        self.assertIs(intact[0][0]["ok"], True)
         for name in ("receipt.py", "witness.py", "reading.py"):
             with self.subTest(name):
                 parent = self.copy_package("gone-" + name)
-                os.unlink(os.path.join(parent, "telos_receipt", "_kit_vendor", name))
-                self.assertEqual(self.calls(parent), [(MODIFIED, MODIFIED, MODIFIED)] * 2)
+                path = os.path.join(parent, "telos_receipt", "_kit_vendor", name)
+                held = Path(path).read_bytes()
+                os.unlink(path)
+                self.assertEqual(self.calls(parent), [(UNAVAILABLE, UNAVAILABLE, UNAVAILABLE)] * 2)
+                Path(path).write_bytes(held)  # back as it was: a process that starts now answers as the intact one
+                again = self.calls(parent)
+                self.assertEqual([(by_dir, by_bytes) for by_dir, by_bytes, _ in again],
+                                 [(by_dir, by_bytes) for by_dir, by_bytes, _ in intact])
+                self.assertEqual([reference["payload"] for _, _, reference in again],
+                                 [reference["payload"] for _, _, reference in intact])
 
     def test_s3_the_pin_in_the_source_is_the_digest_of_each_vendored_file(self):
         record = self.record()
@@ -1372,7 +1492,8 @@ class S8PythonFloor(Case):
             "the reader does not report on the content of a row it could not verify")
 
     def test_a3_1_the_module_and_the_readme_say_what_a_missing_cryptography_reads_as(self):
-        for where, said in [("module", flat(self.record().__doc__)), ("readme", flat(readme_section()))]:
+        for where, said in [("module", flat(self.record().__doc__)), ("readme", flat(readme_section())),
+                            ("changelog", flat(changelog_unreleased()))]:  # (the changelog: A6.3)
             for sentence in self.A3_1:
                 with self.subTest(where=where, sentence=sentence):
                     self.assertIn(sentence, said)
@@ -1388,6 +1509,12 @@ def readme_section():
     text = (ROOT / "README.md").read_text(encoding="utf-8")
     start = text.index("## Reading a kit record (DRAFT)")
     return text[start:text.index("\n## ", start + 1)]
+
+
+def changelog_unreleased():
+    """The CHANGELOG's first entry: the unreleased one."""
+    text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    return text[:text.index("\n## ", text.index("## ") + 1)]
 
 
 def vendored_pins():
@@ -2052,6 +2179,136 @@ class R3FixedRefusals(Case):
                     record.check_record(*self.args(), pins=self.canary())
             self.assertEqual(os.listdir(root), [])
 
+    PROCESS_CONTROL = (KeyboardInterrupt, SystemExit, GeneratorExit)
+
+    def test_a6_2_an_interrupt_propagates_and_the_removal_is_attempted_also_when_the_removal_fails(self):
+        record = self.record()
+        reader = self.reader().receipt
+        if os.geteuid() == 0:
+            self.fail("run as an ordinary user")
+        real_put = record._put
+
+        def interrupted_put(raised):
+            def put(path, raw):
+                real_put(path, raw)
+                raise raised
+            return put
+        # beside every row below: the same call, uninterrupted, is a report and leaves nothing
+        root, in_root = self.temporary("uninterrupted")
+        with in_root:
+            self.assert_report(self.answer(record.check_record, *self.args(), pins=self.canary()),
+                               ORACLE["fixtures"]["witnessed"]["canary_pins"])
+        self.assertEqual(os.listdir(root), [])
+        count = 0
+        for error in self.PROCESS_CONTROL:
+            for where in ("in the reader", "in a write"):
+                for label, behaviour in [("the removal works", None), ("the removal fails every time", "fails"),
+                                         ("the removal returns and the directory is still there", "does nothing")]:
+                    with self.subTest(error=error.__name__, where=where, removal=label):
+                        count += 1
+                        root, in_root = self.temporary(f"interrupt-{count}")
+                        homes, noting = self.made()
+                        asked, removing = self.removal(root, behaviour)
+                        raised = error()
+                        if where == "in the reader":
+                            fault = mock.patch.object(reader, "check_record", side_effect=raised)
+                        else:
+                            fault = mock.patch.object(record, "_put", interrupted_put(raised))
+                        returned = []
+                        with in_root, noting, removing, fault:
+                            with self.assertRaises(error) as caught:  # it propagates: no answer, no `residual`
+                                returned.append(record.check_record(*self.args(), pins=self.canary()))
+                        self.assertIs(caught.exception, raised)  # the same exception object, not another in its place
+                        self.assertIs(type(caught.exception), error)
+                        self.assertEqual(returned, [])
+                        self.assertEqual(len(homes), 1)
+                        self.assertTrue(homes[0].startswith(os.path.join(root, "")))
+                        self.assertGreaterEqual(len(asked), 1)  # the removal was attempted, on that directory
+                        self.assertEqual(set(asked), {homes[0]})
+                        if behaviour is None:
+                            self.assertFalse(os.path.lexists(homes[0]))
+                        else:  # the removal failed too: the directory is left, with the caller's bytes in it
+                            self.assertTrue(os.path.isdir(homes[0]))
+                            self.assertIn("receipt.json", os.listdir(homes[0]))
+                            shutil.rmtree(homes[0])  # this test removes what the module could not
+                        self.assertEqual(os.listdir(root), [])
+
+    def test_a6_2_a_process_control_exception_propagates_from_each_function_beside_an_exception_which_is_refused(self):
+        record = self.record()
+        reader = self.reader().receipt
+        home = str(FIXTURES / "witnessed")
+        receipt, _row, reading = self.args()
+        root, in_root = self.temporary("each")
+        calls = [("check_record_dir", "check_record", lambda: record.check_record_dir(home, pins=self.canary())),
+                 ("check_record", "check_record", lambda: record.check_record(*self.args(), pins=self.canary())),
+                 ("build_reference", "check_receipt", lambda: record.build_reference(receipt, reading, agent_id="a"))]
+        with in_root:
+            for name, inside, call in calls:
+                with self.subTest(name, error="RuntimeError"):
+                    with mock.patch.object(reader, inside, side_effect=RuntimeError("inside")):
+                        self.assertEqual(self.answer(call), UNAVAILABLE)
+                for error in self.PROCESS_CONTROL:
+                    with self.subTest(name, error=error.__name__):
+                        returned, raised = [], error()
+                        with mock.patch.object(reader, inside, side_effect=raised):
+                            with self.assertRaises(error) as caught:
+                                returned.append(call())
+                        self.assertIs(caught.exception, raised)
+                        self.assertEqual(returned, [])
+                with self.subTest(name, error=None):  # and the function still answers afterwards
+                    self.assertNotIn("reason", self.answer(call))
+                self.assertEqual(os.listdir(root), [])
+
+    def test_a6_2_a_call_that_does_not_fit_the_signature_is_pythons_typeerror_beside_one_that_fits(self):
+        record = self.record()
+        home = str(FIXTURES / "witnessed")
+        receipt, row, reading = self.args()
+        fits = [lambda: record.check_record_dir(home), lambda: record.check_record(receipt, row, reading),
+                lambda: record.build_reference(receipt, reading, agent_id="a")]
+        for call in fits:
+            self.assertNotIn("reason", self.answer(call))
+        misfits = {"check_record_dir, no argument": lambda: record.check_record_dir(),
+                   "check_record_dir, two positional": lambda: record.check_record_dir(home, None),
+                   "check_record_dir, unknown keyword": lambda: record.check_record_dir(home, nope=1),
+                   "check_record, no argument": lambda: record.check_record(),
+                   "check_record, four positional": lambda: record.check_record(receipt, row, reading, None),
+                   "check_record, unknown keyword": lambda: record.check_record(receipt, nope=1),
+                   "build_reference, no agent_id": lambda: record.build_reference(receipt, reading),
+                   "build_reference, agent_id positional": lambda: record.build_reference(receipt, reading, "a"),
+                   "build_reference, unknown keyword": lambda: record.build_reference(receipt, agent_id="a", nope=1)}
+        for label, call in misfits.items():
+            with self.subTest(label):
+                with self.assertRaises(TypeError):
+                    call()
+
+    BOUNDARY = ("argument-binding errors (wrong arity or an unknown keyword) are raised by python before the function "
+                "body runs",
+                "process-control exceptions (`keyboardinterrupt`, `systemexit`, `generatorexit`) propagate")
+    INTERRUPT = ("on a process-control exception the removal of the temporary directory is attempted",
+                 "if that removal also fails, the exception still propagates, no `residual` answer follows, and a "
+                 "directory may be left")
+    SCOPE = ("no `exception` raised inside the three function bodies leaves them",)
+    STALE = ("after the temporary directory is removed", "raise no exception for any argument value",
+             "no exception leaves the three functions for any value", "never raises for any value")
+
+    def test_a6_2_the_docstrings_readme_and_changelog_state_the_boundary_in_the_same_words(self):
+        record = self.record()
+        whole = self.SCOPE + self.BOUNDARY + self.INTERRUPT
+        texts = [("module", record.__doc__, whole), ("readme", readme_section(), whole),
+                 ("changelog", changelog_unreleased(), whole),
+                 ("check_record_dir", record.check_record_dir.__doc__, self.BOUNDARY),
+                 ("check_record", record.check_record.__doc__, self.BOUNDARY + self.INTERRUPT),
+                 ("build_reference", record.build_reference.__doc__, self.BOUNDARY)]
+        for where, text, sentences in texts:
+            for sentence in sentences:
+                with self.subTest(where=where, sentence=sentence):
+                    self.assertIn(sentence, flat(text))
+            for sentence in self.STALE:
+                with self.subTest(where=where, stale=sentence):
+                    self.assertNotIn(sentence, flat(text))
+        # beside it: the same search does find a stale sentence where one is (this file's own source)
+        self.assertIn(self.STALE[0], flat(Path(__file__).read_text(encoding="utf-8")))
+
     def test_r3_build_reference_refuses_whatever_the_reader_raises_or_misnames_beside_the_reader_as_it_is(self):
         record = self.record()
         kit = self.reader()
@@ -2237,6 +2494,140 @@ class R5ReferenceMeaning(Case):
                     self.assertNotIn(word, text.lower())
         # beside it: the same search does find such a word in a file that has one (this file's own first lines)
         self.assertIn(self.BANNED[1], Path(__file__).read_text(encoding="utf-8").lower())
+
+
+class A6FailedRead(Case):
+    """Amendment 6.1 (S15): a vendored file that could not be read was not measured. Only a measured mismatch is
+    `kit_reader_modified`, and only that and a successful load are latched."""
+
+    FUNCTIONS = ("check_record_dir", "check_record", "build_reference")
+    ORDER = ("reading.py", "witness.py", "receipt.py")  # the fixed order the files are taken in
+    MODES = ("open", "read")
+    ALL = {"reading.py": 1, "witness.py": 1, "receipt.py": 1}
+
+    def setUp(self):
+        super().setUp()
+        self.record()
+
+    def steps(self, function, steps, copy=None):
+        """What each "call" step of S15_PROBE gave, in a fresh interpreter on this tree or on the copy `copy`.
+        Every case is its own process, so no case meets a reader an earlier case loaded or a refusal it latched;
+        the probe says what it found before its first step, and that is asserted here."""
+        spec = {"path": [copy or str(ROOT)], "function": function, "record": str(FIXTURES / "witnessed"),
+                "pins": ORACLE["canary_pins"], "steps": steps, "copy": copy}
+        env = {"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1", "TMPDIR": self.tmp, "HOME": self.tmp}
+        done = subprocess.run([sys.executable, "-B", "-c", S15_PROBE, json.dumps(spec)], capture_output=True,
+                              text=True, env=env, cwd=self.tmp, timeout=120, check=False)
+        self.assertEqual((done.returncode, done.stderr), (0, ""), done.stdout)
+        said = json.loads(done.stdout)
+        self.assertIs(said["fresh"], True)  # an unloaded reader and nothing latched when the case began
+        calls = said["calls"]
+        for call in calls:
+            if "kind" in call["answer"]:  # a reference: its time of issue aside
+                call["answer"] = {"kind": call["answer"]["kind"], "payload": call["answer"]["payload"]}
+        return calls
+
+    def intact(self, function):
+        """By hand where the oracle has it: the normal answer of `function`, from a process with no fault."""
+        first, second = self.steps(function, [["call"], ["call"]])
+        self.assertEqual((first["opened"], second["opened"]), (self.ALL, {}))  # read once, then latched
+        self.assertEqual((first["latched"], second["latched"]), (True, True))
+        self.assertEqual(first["answer"], second["answer"])
+        if function == "build_reference":
+            self.assertEqual(first["answer"]["kind"], "kit_record_reference")
+            self.assertEqual(sorted(first["answer"]["payload"]),
+                             ["config_identity", "reading_sha256", "record_schema", "record_sha256"])
+        else:
+            self.assertEqual(first["answer"], self.ok(ORACLE["fixtures"]["witnessed"]["canary_pins"]))
+        return first["answer"]
+
+    def taken_up_to(self, name):
+        return {f: 1 for f in self.ORDER[:self.ORDER.index(name) + 1]}
+
+    def test_s15_an_oserror_opening_or_reading_a_vendored_file_is_reader_unavailable_not_latched_beside_intact(self):
+        for function in self.FUNCTIONS:
+            want = self.intact(function)
+            for name in self.ORDER:
+                for mode in self.MODES:
+                    with self.subTest(function=function, file=name, fault=mode):
+                        calls = self.steps(function, [["fault", name, mode], ["call"], ["call"], ["clear"], ["call"],
+                                                      ["fault", name, mode], ["call"]])
+                        # the fault: this call is refused, and so is the next, each having taken the files anew
+                        self.assertEqual([c["answer"] for c in calls[:2]], [UNAVAILABLE, UNAVAILABLE])
+                        self.assertEqual([c["latched"] for c in calls[:2]], [False, False])
+                        self.assertEqual([c["opened"] for c in calls[:2]], [self.taken_up_to(name)] * 2)
+                        # the fault removed: the normal answer, from all three files read again from the first
+                        self.assertEqual(calls[2]["answer"], want)
+                        self.assertEqual((calls[2]["opened"], calls[2]["latched"]), (self.ALL, True))
+                        # and that load is latched: the fault, back again, is never met
+                        self.assertEqual(calls[3]["answer"], want)
+                        self.assertEqual((calls[3]["opened"], calls[3]["latched"]), ({}, True))
+
+    def test_s15_a_real_byte_mismatch_is_kit_reader_modified_and_stays_so_after_the_file_is_restored(self):
+        for function in self.FUNCTIONS:
+            want = self.intact(function)
+            for name in self.ORDER:
+                with self.subTest(function=function, file=name):
+                    parent = self.copy_package(f"mismatch-{function}-{name}")
+                    path = Path(parent, "telos_receipt", "_kit_vendor", name)
+                    calls = self.steps(function, [["fault", name, "open"], ["call"], ["fault", name, "read"], ["call"],
+                                                  ["clear"], ["flip", name], ["call"], ["restore", name], ["call"],
+                                                  ["fault", name, "open"], ["call"]], parent)
+                    # neither failed read is latched, so the changed byte is then measured, and that is latched
+                    self.assertEqual([c["answer"] for c in calls], [UNAVAILABLE, UNAVAILABLE, MODIFIED, MODIFIED,
+                                                                    MODIFIED])
+                    self.assertEqual([c["latched"] for c in calls], [False, False, True, True, True])
+                    self.assertEqual(calls[2]["opened"], self.taken_up_to(name))
+                    self.assertEqual([c["opened"] for c in calls[3:]], [{}, {}])  # restored on disk; never read again
+                    # the restore was real: the file is the pinned file again, and a new process answers normally
+                    self.assertEqual(sha(path.read_bytes()), sha((VENDOR / name).read_bytes()))
+                    self.assertEqual(self.steps(function, [["call"]], parent)[0]["answer"], want)
+
+    def test_s15_the_first_failure_in_the_fixed_order_decides(self):
+        first, last = self.ORDER[0], self.ORDER[-1]
+        for function in self.FUNCTIONS:
+            want = self.intact(function)
+            with self.subTest(function=function, order="a mismatch before an unreadable file"):
+                parent = self.copy_package(f"order-mismatch-first-{function}")
+                calls = self.steps(function, [["flip", first], ["fault", last, "open"], ["call"], ["clear"],
+                                              ["restore", first], ["call"]], parent)
+                self.assertEqual([c["answer"] for c in calls], [MODIFIED, MODIFIED])
+                self.assertEqual([c["opened"] for c in calls], [{first: 1}, {}])
+                self.assertEqual(self.steps(function, [["call"]], parent)[0]["answer"], want)
+            with self.subTest(function=function, order="an unreadable file before a mismatch"):
+                parent = self.copy_package(f"order-unreadable-first-{function}")
+                calls = self.steps(function, [["fault", first, "read"], ["flip", last], ["call"], ["clear"], ["call"],
+                                              ["restore", last], ["call"]], parent)
+                self.assertEqual([c["answer"] for c in calls], [UNAVAILABLE, MODIFIED, MODIFIED])
+                self.assertEqual([c["opened"] for c in calls], [{first: 1}, self.ALL, {}])
+                self.assertEqual([c["latched"] for c in calls], [False, True, True])
+                self.assertEqual(self.steps(function, [["call"]], parent)[0]["answer"], want)
+            with self.subTest(function=function, order="an earlier file changes after a later one failed"):
+                # the failed attempt had read `first` whole and intact; nothing of that is kept: the retry reads
+                # `first` again and measures the byte changed since
+                parent = self.copy_package(f"order-reread-{function}")
+                calls = self.steps(function, [["fault", last, "read"], ["call"], ["flip", first], ["clear"], ["call"],
+                                              ["restore", first], ["call"]], parent)
+                self.assertEqual([c["answer"] for c in calls], [UNAVAILABLE, MODIFIED, MODIFIED])
+                self.assertEqual([c["opened"] for c in calls], [self.ALL, {first: 1}, {}])
+                self.assertEqual([c["latched"] for c in calls], [False, True, True])
+                self.assertEqual(self.steps(function, [["call"]], parent)[0]["answer"], want)
+            with self.subTest(function=function, order="a file that is gone, then back"):
+                parent = self.copy_package(f"order-gone-{function}")
+                calls = self.steps(function, [["remove", last], ["call"], ["restore", last], ["call"]], parent)
+                self.assertEqual([c["answer"] for c in calls], [UNAVAILABLE, want])
+                self.assertEqual([c["latched"] for c in calls], [False, True])
+
+    FAILED_READ = ("a vendored file that could not be opened or read is `reader_unavailable` for that call and is "
+                   "not latched",
+                   "the next call reads and checks all three files again")
+
+    def test_s15_the_module_readme_and_changelog_say_a_failed_read_is_not_latched(self):
+        for where, text in [("module", self.record().__doc__), ("readme", readme_section()),
+                            ("changelog", changelog_unreleased())]:
+            for sentence in self.FAILED_READ:
+                with self.subTest(where=where, sentence=sentence):
+                    self.assertIn(sentence, flat(text))
 
 
 class S9ExistingPackage(Case):

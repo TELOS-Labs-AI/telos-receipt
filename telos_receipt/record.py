@@ -30,7 +30,8 @@ shows only that the payload is the payload that was hashed.
 Every other answer is a refusal, `{"ok": False, "reason": ...}`, with one of the seven reasons in REASONS (and,
 in the one case named below, `"residual": True` beside it):
 
-  kit_reader_modified   a file under `_kit_vendor/` is not the file this module pins; every call answers this
+  kit_reader_modified   a file under `_kit_vendor/` was read in full and is not the file this module pins; every
+                        later call of the process answers this
   record_unreadable     no readable regular `receipt.json` at the path, or (build_reference) a receipt the kit
                         reader does not read as VALID or names no record digest for
   input_too_large       a bytes input over the kit's cap for it (receipt 1,048,576; row 4,096; reading 32,768)
@@ -39,28 +40,35 @@ in the one case named below, `"residual": True` beside it):
   invalid_argument      an argument of the wrong type: a record file that is not bytes (or None where the file may
                         be absent), a path that is not str, bytes or os.PathLike, an `agent_id` that is not a str
                         or that UTF-8 cannot carry (a lone surrogate)
-  reader_unavailable    the reader could not be run to an answer here: no usable temporary directory, a write
-                        there failed, the directory could not be removed, the reader raised or returned something
-                        other than a report and a state that agree, or a reader file asked for a module outside its
-                        closed list
+  reader_unavailable    the reader could not be run to an answer here: a file under `_kit_vendor/` could not be
+                        opened or read, no usable temporary directory, a write there failed, the directory could
+                        not be removed, the reader raised or returned something other than a report and a state
+                        that agree, or a reader file asked for a module outside its closed list
   reading_invalid       (build_reference) a reading was supplied and the kit reader does not read it as this
                         record's saved reading; a supplied reading is never treated as no reading
 
-No exception leaves the three functions for any value of their arguments, and a failure to write or remove the
-temporary files is a refusal, never a report. check_record tries to remove its temporary directory on every path,
-also after an error inside, and returns a report only after it has seen that the directory is no longer there. If
-the directory could not be removed the answer is
+No `Exception` raised inside the three function bodies leaves them, for any value of their arguments, and a
+failure to write or remove the temporary files is a refusal, never a report. check_record tries to remove its
+temporary directory on every path, also after an error inside, and returns a report only after it has seen that
+the directory is no longer there. If the directory could not be removed the answer is
 `{"ok": False, "reason": "reader_unavailable", "residual": True}`: the caller's bytes are still in a private
 directory under the system's temporary directory, and the answer does not name it. No other answer has a
-`residual` key. Two things are not answers and pass through: a call that does not
-fit a function's signature (Python's own TypeError, before the function runs), and KeyboardInterrupt or SystemExit
-(after the temporary directory is removed).
+`residual` key. Two things are outside that boundary and are not answers:
+argument-binding errors (wrong arity or an unknown keyword) are raised by Python before the function body runs,
+and process-control exceptions (`KeyboardInterrupt`, `SystemExit`, `GeneratorExit`) propagate. On a
+process-control exception the removal of the temporary directory is attempted; if that removal also fails, the
+exception still propagates, no `residual` answer follows, and a directory may be left. Nothing is said here about
+a process that is ended without running its handlers (SIGKILL, a crash of the interpreter): no removal runs then.
 
 The pin. KIT_COMMIT and KIT_FILES below are written by tools/vendor_kit_reader.py together with the copies.
 Verification is latched at first use: at the first call in a process the three files are read once, hashed and
-compared with KIT_FILES, and that outcome stands for the life of the process. The bytes verified are the bytes
-executed: they are compiled from memory, so no cached bytecode and no second read of the file can stand in for
-them. Later changes to the files on disk are neither used nor detected in a running process; a new process checks
+compared with KIT_FILES, and that outcome (the loaded reader, or `kit_reader_modified` for a file that differs from
+its pin) stands for the life of the process. A vendored file that could not be opened or read is
+`reader_unavailable` for that call and is not latched: nothing was measured and nothing is kept, and the next call
+reads and checks all three files again. The files are taken in one fixed order and the first failure decides: a
+mismatch in an earlier file is latched even if a later file could not have been read. The bytes verified are the
+bytes executed: they are compiled from memory, so no cached bytecode and no second read of the file can stand in
+for them. Later changes to the files on disk are neither used nor detected in a running process; a new process checks
 again. The three files find each other through this loader alone and may import only each other and a closed list
 of standard library and `cryptography` names (_ALLOWED_IMPORTS). Any other import by a reader file, at load or
 later, is the refusal `reader_unavailable` for that call and every later call of the process. No module named
@@ -73,9 +81,9 @@ signature check, each with whatever it imports itself. The closed list covers th
 `__import__`; it is not a sandbox, and the reader is trusted because it is the pinned bytes.
 
 Offline: no network call and no process. check_record_dir writes nothing. check_record writes its inputs into a
-private temporary directory (0700, files 0600), reads that directory with the same reader, and removes it on
-every path (see `residual` above). `cryptography` is imported by the kit reader, and only when a row reaches its
-signature check.
+private temporary directory (0700, files 0600), reads that directory with the same reader, and attempts its
+removal on every path (see `residual` and the process-control exceptions above). `cryptography` is imported by the
+kit reader, and only when a row reaches its signature check.
 
 Missing `cryptography`: the answer is still a report, the kit reader's own, and never WITNESSED.
 `WITNESS_VERIFIER_UNAVAILABLE` is returned for every row that reaches the reader's signature step, and only for
@@ -152,7 +160,8 @@ _ORDER = ("reading", "witness", "receipt")  # load order: each file asks only fo
 _STATES = ("WITNESSED", "NOT_WITNESSED")
 _HEX64 = re.compile(r"[0-9a-f]{64}")
 _LOCK = threading.Lock()
-_LOADED: list[Any] = []  # empty until the first use; then one item: the loaded reader, or "kit_reader_modified"
+# Empty until an attempt measured all it read; then one item: the loaded reader, or "kit_reader_modified".
+_LOADED: list[Any] = []
 _OUTSIDE: list[str] = []  # what a reader file asked to import outside the closed list; never emptied
 
 
@@ -175,7 +184,8 @@ def _refusal(reason: str, residual: bool = False) -> dict[str, Any]:
 
 
 def _load(*, _reader: Any = None) -> _Kit | str:
-    """The three vendored files as modules, or "kit_reader_modified" when one is not the file KIT_FILES pins.
+    """The three vendored files as modules; "kit_reader_modified" when one, read in full, is not the file
+    KIT_FILES pins; "reader_unavailable" when one could not be opened or read. The first failure in _ORDER decides.
 
     `_reader` is for this package's tests alone and no public function passes it: `({name: bytes}, pins)` stands
     in for the three files on disk and for KIT_FILES, so that bytes which match their own pins can be put to the
@@ -190,8 +200,8 @@ def _load(*, _reader: Any = None) -> _Kit | str:
                     raw = stream.read()
             else:
                 raw = given[name]
-        except OSError:
-            return "kit_reader_modified"
+        except OSError:  # not read, so not measured (A6.1): no mismatch, and _kit keeps nothing of this attempt
+            return "reader_unavailable"
         if hashlib.sha256(raw).hexdigest() != pins[f"h0a/{name}.py"]:
             return "kit_reader_modified"
         sources[name] = raw
@@ -226,11 +236,15 @@ def _load(*, _reader: Any = None) -> _Kit | str:
 
 
 def _kit(*, _reader: Any = None) -> _Kit | str:
-    """The loaded reader, or the reason every call is refused. Latched: the files are read and checked once.
+    """The loaded reader, or the reason this call is refused. A loaded reader and "kit_reader_modified" are latched:
+    the files are not read again. "reader_unavailable" is not: nothing is stored, and the next call starts again.
     (`_reader`: see _load; the public functions call this with no argument.)"""
     with _LOCK:
         if not _LOADED:
-            _LOADED.append(_load(_reader=_reader))
+            kit = _load(_reader=_reader)
+            if kit == "reader_unavailable":  # for this call alone: the next call takes all three files again
+                return kit
+            _LOADED.append(kit)
         return _LOADED[0]
 
 
@@ -322,7 +336,9 @@ def check_record_dir(path: Any, *, pins: Any = None) -> dict[str, Any]:
     "WITNESSED" or "NOT_WITNESSED", from the reader's own return). `pins=None` checks a Witness row under the key
     the kit pins ("default"); a `Pins` checks it under that key instead ("caller").
     A `receipt.json` that is missing, not a regular file, or not readable is refused: `record_unreadable`.
-    Reads only; writes nothing. Never raises for any value of `path` or `pins`: see REASONS.
+    Reads only; writes nothing. No `Exception` raised inside leaves it for any value of `path` or `pins` (see
+    REASONS); argument-binding errors (wrong arity or an unknown keyword) are raised by Python before the function
+    body runs, and process-control exceptions (`KeyboardInterrupt`, `SystemExit`, `GeneratorExit`) propagate.
     """
     return _answer(_check_record_dir, path, pins)
 
@@ -369,7 +385,7 @@ def _check_record(receipt: Any, witness: Any, reading: Any, pins: Any) -> dict[s
             result = _report(kit, os.path.join(home, kit.witness.RECEIPT), kit_pins, pins)
         except Exception:  # noqa: BLE001  (an error inside is a refusal; the directory is removed below either way)
             result = _refusal("reader_unavailable")
-    finally:  # also on an interrupt, which then passes through
+    finally:  # also on an interrupt: the removal is attempted, and the interrupt passes through either way
         gone = _removed(home)
     if not gone:  # whatever the reader answered: the caller's bytes are still on disk, and the path is not told
         return _refusal("reader_unavailable", residual=True)
@@ -385,11 +401,16 @@ def check_record(
     ran, not that the record is authentic: authenticity is the witness state only (`witness_state`).
     The types and the caps are checked first: an input that is not bytes is refused, `invalid_argument`, and one
     over the kit's cap for it, `input_too_large`, before anything is written. The bytes then go into a private
-    temporary directory, the kit reader reads that directory exactly as check_record_dir would, and the directory
-    is removed on every path. If it cannot be made or written, or the reader raises, the answer is the refusal
-    `reader_unavailable`, never a report and never an exception. A report is returned only once the directory is
-    seen to be gone; if it could not be removed the answer is `{"ok": False, "reason": "reader_unavailable",
-    "residual": True}`, which does not name the directory.
+    temporary directory, the kit reader reads that directory exactly as check_record_dir would, and the removal of
+    the directory is attempted on every path. If it cannot be made or written, or the reader raises an
+    `Exception`, the answer is the refusal `reader_unavailable`, never a report. A report is returned only once
+    the directory is seen to be gone; if it could not be removed the answer is `{"ok": False, "reason":
+    "reader_unavailable", "residual": True}`, which does not name the directory.
+
+    Outside that: argument-binding errors (wrong arity or an unknown keyword) are raised by Python before the
+    function body runs, and process-control exceptions (`KeyboardInterrupt`, `SystemExit`, `GeneratorExit`)
+    propagate. On a process-control exception the removal of the temporary directory is attempted; if that removal
+    also fails, the exception still propagates, no `residual` answer follows, and a directory may be left.
     """
     return _answer(_check_record, receipt, witness, reading, pins)
 
@@ -449,10 +470,13 @@ def build_reference(receipt: bytes, reading: bytes | None = None, *, agent_id: s
     `agent_id` are not covered by the payload hash: `verify_receipt` shows only that the payload is the payload
     that was hashed. The receipt is the ordinary `build_receipt` envelope, `signature` null.
 
-    Refusals, never an exception: `invalid_argument` for a `receipt` or `reading` that is not bytes or an
+    Refusals: `invalid_argument` for a `receipt` or `reading` that is not bytes or an
     `agent_id` that is not a str UTF-8 can carry; `input_too_large` over the caps of check_record (receipt
     1,048,576 bytes, reading 32,768); `record_unreadable` for a receipt the kit reader does not read as VALID or
     names no record digest for; `reading_invalid` for a supplied reading the kit reader does not read as this
-    record's saved reading (it is never treated as absent); `reader_unavailable` when the reader raises.
+    record's saved reading (it is never treated as absent); `reader_unavailable` when the reader raises an
+    `Exception`. Outside that: argument-binding errors (wrong arity or an unknown keyword) are raised by Python
+    before the function body runs, and process-control exceptions (`KeyboardInterrupt`, `SystemExit`,
+    `GeneratorExit`) propagate.
     """
     return _answer(_build_reference, receipt, reading, agent_id)

@@ -166,21 +166,28 @@ nothing about the kit's Witness.
 DRAFT. Every other answer is a refusal, `{"ok": false, "reason": ...}`, with one of seven reasons:
 `kit_reader_modified`, `record_unreadable`, `input_too_large` (receipt over 1,048,576 bytes, row over 4,096,
 reading over 32,768), `pins_invalid`, `invalid_argument` (an argument of the wrong type, or an `agent_id` that
-UTF-8 cannot carry), `reader_unavailable` (the reader could not be run to an answer: its temporary files could not
-be made, written or removed, or it raised) and `reading_invalid`. The three functions raise no exception for any
-argument value. They run offline and start no process. `check_record_dir` writes nothing; `check_record` reads
-the bytes from a private temporary directory, tries to remove it on every path, and returns a report only after
-it has seen that the directory is gone. If the directory could not be removed, the answer is
-`{"ok": false, "reason": "reader_unavailable", "residual": true}`: the bytes are still in a private directory
-under the system's temporary directory, and the answer does not name it. No other answer has a `residual` key.
+UTF-8 cannot carry), `reader_unavailable` (the reader could not be run to an answer: a reader file could not be
+opened or read, its temporary files could not be made, written or removed, or it raised) and `reading_invalid`. No
+`Exception` raised inside the three function bodies leaves them, for any argument value. Outside that boundary:
+argument-binding errors (wrong arity or an unknown keyword) are raised by Python before the function body runs,
+and process-control exceptions (`KeyboardInterrupt`, `SystemExit`, `GeneratorExit`) propagate. On a
+process-control exception the removal of the temporary directory is attempted; if that removal also fails, the
+exception still propagates, no `residual` answer follows, and a directory may be left. The functions run offline and
+start no process. `check_record_dir` writes nothing; `check_record` reads the bytes from a private temporary directory,
+tries to remove it on every path, and returns a report only after it has seen that the directory is gone. If the
+directory could not be removed, the answer is `{"ok": false, "reason": "reader_unavailable", "residual": true}`:
+the bytes are still in a private directory under the system's temporary directory, and the answer does not name
+it. No other answer has a `residual` key.
 
 DRAFT. The check of the reader is latched at first use: the three reader files are hashed against the pin at the
 first call in a process, and the bytes that were hashed are the bytes that run. A later change to those files on
-disk is neither used nor detected by a running process. The reader files import only each other and a closed list
-of standard library and `cryptography` modules; an `h0a` package that is importable or already imported is never
-used, and `sys.path` is not changed. Importing those listed modules adds them to `sys.modules` as any import
-does; nothing already there is replaced or removed. Any change of reader bytes at a re-pin requires a delta
-review and refreshed oracle evidence.
+disk is neither used nor detected by a running process. `kit_reader_modified` means a reader file was read in full
+and differs from its pin; that answer is latched too. A vendored file that could not be opened or read is
+`reader_unavailable` for that call and is not latched: the next call reads and checks all three files again. The
+reader files import only each other and a closed list of standard library and `cryptography` modules; an `h0a`
+package that is importable or already imported is never used, and `sys.path` is not changed. Importing those
+listed modules adds them to `sys.modules` as any import does; nothing already there is replaced or removed. Any
+change of reader bytes at a re-pin requires a delta review and refreshed oracle evidence.
 
 DRAFT. The signature check needs the `cryptography` package (the `native` extra installs it); it is imported only
 when a row reaches that check. Missing `cryptography`: the answer is still the kit reader's report, and never
