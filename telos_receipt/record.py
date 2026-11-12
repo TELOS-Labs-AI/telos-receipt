@@ -75,8 +75,11 @@ signature check, each with whatever it imports itself. The closed list covers th
 Offline: no network call and no process. check_record_dir writes nothing. check_record writes its inputs into a
 private temporary directory (0700, files 0600), reads that directory with the same reader, and removes it on
 every path (see `residual` above). `cryptography` is imported by the kit reader, and only when a row reaches its
-signature check. With the reader pinned here, a row that reaches that check on a machine without `cryptography`
-is refused, `reader_unavailable`: no report is made without that check.
+signature check. On a machine without `cryptography` a row that reaches that check gets the kit reader's own
+answer: a report, NOT_WITNESSED, with the kit's reason WITNESS_VERIFIER_UNAVAILABLE. A row the reader refuses
+before that check (not a row, not a row for these pins, a row that is not the row its hash names) keeps the reason
+it has with `cryptography`. The reader checks the signature before it matches the row to the record, so a signed
+row of another record reads WITNESS_VERIFIER_UNAVAILABLE there, not WITNESS_NOT_THIS_RECORD. Never WITNESSED.
 
 Needs Python 3.11 or later (the base package keeps its own floor and never imports this module) and a POSIX file
 system interface.

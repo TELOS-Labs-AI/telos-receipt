@@ -1,12 +1,26 @@
 {
  "canary_pins": {
   "anchor": "079f9848cbcf93bee13276cc3acc1f03137ad1666d8c5968eb2dea0bcafec9a9",
-  "fingerprint": "1e10679285ded12b832bde6941cc272ff686709a885fa016a158d6696d4e8814",
-  "public_key": "a96568360eb0cd702d6676585dab2070ad906f6f9aa149e1103b995202d52e0f"
+  "fingerprint": "4735773011b6a02e32befc548a4b5e1f60a3b4744c2f5a2d4e2fb3817787e753",
+  "public_key": "08f8b67dcd982d42bbcc676269703fc112d2581709105b082b24023dc8f985b8"
  },
  "fixtures": {
   "not_witnessed": {
    "canary_pins": {
+    "authenticity": "NOT_WITNESSED",
+    "coverage": "COMPLETE_FOR_DECLARED_PROFILE",
+    "coverage_gaps": [],
+    "errors": [],
+    "human_review": "MISSING",
+    "identity_assurance": "local-operator-asserted",
+    "reading": {
+     "state": "READING_SAVED"
+    },
+    "structure": "VALID",
+    "unknown_outcomes": [],
+    "witness_reason": "WITNESS_NOT_REQUESTED"
+   },
+   "canary_pins_no_verifier": {
     "authenticity": "NOT_WITNESSED",
     "coverage": "COMPLETE_FOR_DECLARED_PROFILE",
     "coverage_gaps": [],
@@ -26,9 +40,9 @@
    ],
    "kit_request": {
     "config_identity": "722c06e7ed274ee5034645f3ff4ceb2bbaeb92a611837e3ca58d661dbc7b8472",
-    "reading_sha256": "682214ecc37543a425010f25dbcccb092bc8773d5212c693339fc1dc56d24112",
+    "reading_sha256": "f119a3ed70387085c676ab6a53e7b7b50a77532e52e6b1ce50b74b345c42d2e8",
     "record_schema": "h0a.receipt/1",
-    "record_sha256": "936f643ea57e0abd6bc02242446dfe846b5764540f80f22d258dc08841969725"
+    "record_sha256": "627773b47e7bf2aaa2cf7d6406efa190ff01c385c5e099ac18be50b563aab635"
    },
    "pinned_key_cli": {
     "authenticity": "NOT_WITNESSED",
@@ -61,6 +75,20 @@
     "unknown_outcomes": [],
     "witness_reason": "WITNESS_REFUSED"
    },
+   "canary_pins_no_verifier": {
+    "authenticity": "NOT_WITNESSED",
+    "coverage": "COMPLETE_FOR_DECLARED_PROFILE",
+    "coverage_gaps": [],
+    "errors": [],
+    "human_review": "MISSING",
+    "identity_assurance": "local-operator-asserted",
+    "reading": {
+     "state": "READING_SAVED"
+    },
+    "structure": "VALID",
+    "unknown_outcomes": [],
+    "witness_reason": "WITNESS_REFUSED"
+   },
    "files": [
     "receipt.json",
     "witness.json",
@@ -68,9 +96,9 @@
    ],
    "kit_request": {
     "config_identity": "722c06e7ed274ee5034645f3ff4ceb2bbaeb92a611837e3ca58d661dbc7b8472",
-    "reading_sha256": "dfbb64b38c50c62eed03342d5b31d632f92d9a6e0c2d1a92a5ca3b6657a9bc52",
+    "reading_sha256": "81e28d6b9d6cca8033dd71ed6b30f3467ba32473fca674ca74e573c3aaa195b1",
     "record_schema": "h0a.receipt/1",
-    "record_sha256": "e39b62fd48850d033178a4210c35e7602209799466635d5952aecbb23df16829"
+    "record_sha256": "22753bf5386a9e074b741a9b50f0d0de4101b5917f9bdd1716f93dbc74f26cd7"
    },
    "pinned_key_cli": {
     "authenticity": "NOT_WITNESSED",
@@ -102,10 +130,24 @@
     "structure": "VALID",
     "unknown_outcomes": [],
     "witness": {
-     "key_fingerprint": "1e10679285ded12b832bde6941cc272ff686709a885fa016a158d6696d4e8814",
+     "key_fingerprint": "4735773011b6a02e32befc548a4b5e1f60a3b4744c2f5a2d4e2fb3817787e753",
      "row": 7,
-     "timestamp": "2026-11-12T02:39:10Z"
+     "timestamp": "2026-11-12T11:57:07Z"
     }
+   },
+   "canary_pins_no_verifier": {
+    "authenticity": "NOT_WITNESSED",
+    "coverage": "COMPLETE_FOR_DECLARED_PROFILE",
+    "coverage_gaps": [],
+    "errors": [],
+    "human_review": "MISSING",
+    "identity_assurance": "local-operator-asserted",
+    "reading": {
+     "state": "READING_SAVED"
+    },
+    "structure": "VALID",
+    "unknown_outcomes": [],
+    "witness_reason": "WITNESS_VERIFIER_UNAVAILABLE"
    },
    "files": [
     "receipt.json",
@@ -114,9 +156,9 @@
    ],
    "kit_request": {
     "config_identity": "722c06e7ed274ee5034645f3ff4ceb2bbaeb92a611837e3ca58d661dbc7b8472",
-    "reading_sha256": "4bd6dee1736d9d62eedf8627947dea01d149bba81cc7f13ca0ac79939563cb6a",
+    "reading_sha256": "066317bfcd0be7f6784d2904ef65c6fd4b12bf97e25b2c2cbce1898314c10d9c",
     "record_schema": "h0a.receipt/1",
-    "record_sha256": "3f7523133606ae7500bebe4ab4e90ce5aa39d0340d914da008544bb2367e07bf"
+    "record_sha256": "cc3893416cba34d1439d21666acdba86580d89b10a15cb3d854dfbe256d0c322"
    },
    "pinned_key_cli": {
     "authenticity": "NOT_WITNESSED",
@@ -135,14 +177,14 @@
    "pinned_key_cli_exit": 0,
    "request_the_stub_received": {
     "config_identity": "722c06e7ed274ee5034645f3ff4ceb2bbaeb92a611837e3ca58d661dbc7b8472",
-    "reading_sha256": "4bd6dee1736d9d62eedf8627947dea01d149bba81cc7f13ca0ac79939563cb6a",
+    "reading_sha256": "066317bfcd0be7f6784d2904ef65c6fd4b12bf97e25b2c2cbce1898314c10d9c",
     "record_schema": "h0a.receipt/1",
-    "record_sha256": "3f7523133606ae7500bebe4ab4e90ce5aa39d0340d914da008544bb2367e07bf"
+    "record_sha256": "cc3893416cba34d1439d21666acdba86580d89b10a15cb3d854dfbe256d0c322"
    }
   }
  },
- "kit_commit": "64dfcef2bbe8ac411d98841ab1216ed4852a33e9",
- "note": "canary_pins: the kit reader check_record(path, pins=<canary>) printed with the reader command's own json.dumps(report, sort_keys=True). pinned_key_cli: the line the kit reader command (python -I h0a/receipt.py <receipt.json>) printed, which checks under the pinned Witness key. The canary private key was held in memory only and is gone.",
+ "kit_commit": "15cc2ebd5d76702c181487ea8b80a4ee786d068e",
+ "note": "canary_pins: the kit reader check_record(path, pins=<canary>) printed with the reader command's own json.dumps(report, sort_keys=True). pinned_key_cli: the line the kit reader command (python -I h0a/receipt.py <receipt.json>) printed, which checks under the pinned Witness key. canary_pins_no_verifier: the same check_record under the canary pins in a process where importing cryptography fails. The canary private key was held in memory only and is gone.",
  "variants": [
   {
    "base": "witnessed",
@@ -161,6 +203,22 @@
     "structure": "INVALID",
     "unknown_outcomes": [],
     "witness_reason": "WITNESS_NOT_THIS_RECORD"
+   },
+   "canary_pins_no_verifier": {
+    "authenticity": "NOT_WITNESSED",
+    "coverage": "UNKNOWN",
+    "coverage_gaps": [],
+    "errors": [
+     "runtime integrity mismatch"
+    ],
+    "human_review": "MISSING",
+    "identity_assurance": "unverified",
+    "reading": {
+     "state": "READING_SAVED"
+    },
+    "structure": "INVALID",
+    "unknown_outcomes": [],
+    "witness_reason": "WITNESS_VERIFIER_UNAVAILABLE"
    },
    "edits": [
     {
@@ -193,6 +251,20 @@
   {
    "base": "witnessed",
    "canary_pins": {
+    "authenticity": "NOT_WITNESSED",
+    "coverage": "COMPLETE_FOR_DECLARED_PROFILE",
+    "coverage_gaps": [],
+    "errors": [],
+    "human_review": "MISSING",
+    "identity_assurance": "local-operator-asserted",
+    "reading": {
+     "state": "READING_SAVED"
+    },
+    "structure": "VALID",
+    "unknown_outcomes": [],
+    "witness_reason": "WITNESS_FILE_INVALID"
+   },
+   "canary_pins_no_verifier": {
     "authenticity": "NOT_WITNESSED",
     "coverage": "COMPLETE_FOR_DECLARED_PROFILE",
     "coverage_gaps": [],
@@ -248,12 +320,26 @@
     "unknown_outcomes": [],
     "witness_reason": "WITNESS_FILE_INVALID"
    },
+   "canary_pins_no_verifier": {
+    "authenticity": "NOT_WITNESSED",
+    "coverage": "COMPLETE_FOR_DECLARED_PROFILE",
+    "coverage_gaps": [],
+    "errors": [],
+    "human_review": "MISSING",
+    "identity_assurance": "local-operator-asserted",
+    "reading": {
+     "state": "READING_SAVED"
+    },
+    "structure": "VALID",
+    "unknown_outcomes": [],
+    "witness_reason": "WITNESS_VERIFIER_UNAVAILABLE"
+   },
    "edits": [
     {
      "file": "witness.json",
      "new": 65,
      "offset": 801,
-     "old": 87
+     "old": 122
     }
    ],
    "name": "signature_byte",
@@ -289,10 +375,24 @@
     "structure": "VALID",
     "unknown_outcomes": [],
     "witness": {
-     "key_fingerprint": "1e10679285ded12b832bde6941cc272ff686709a885fa016a158d6696d4e8814",
+     "key_fingerprint": "4735773011b6a02e32befc548a4b5e1f60a3b4744c2f5a2d4e2fb3817787e753",
      "row": 7,
-     "timestamp": "2026-11-12T02:39:10Z"
+     "timestamp": "2026-11-12T11:57:07Z"
     }
+   },
+   "canary_pins_no_verifier": {
+    "authenticity": "NOT_WITNESSED",
+    "coverage": "COMPLETE_FOR_DECLARED_PROFILE",
+    "coverage_gaps": [],
+    "errors": [],
+    "human_review": "MISSING",
+    "identity_assurance": "local-operator-asserted",
+    "reading": {
+     "state": "READING_SAVED"
+    },
+    "structure": "VALID",
+    "unknown_outcomes": [],
+    "witness_reason": "WITNESS_VERIFIER_UNAVAILABLE"
    },
    "edits": [
     {
@@ -323,6 +423,22 @@
   {
    "base": "not_witnessed",
    "canary_pins": {
+    "authenticity": "NOT_WITNESSED",
+    "coverage": "UNKNOWN",
+    "coverage_gaps": [],
+    "errors": [
+     "runtime integrity mismatch"
+    ],
+    "human_review": "MISSING",
+    "identity_assurance": "unverified",
+    "reading": {
+     "state": "READING_SAVED"
+    },
+    "structure": "INVALID",
+    "unknown_outcomes": [],
+    "witness_reason": "WITNESS_NOT_REQUESTED"
+   },
+   "canary_pins_no_verifier": {
     "authenticity": "NOT_WITNESSED",
     "coverage": "UNKNOWN",
     "coverage_gaps": [],
@@ -381,6 +497,20 @@
     "structure": "VALID",
     "unknown_outcomes": [],
     "witness_reason": "WITNESS_NOT_THIS_RECORD"
+   },
+   "canary_pins_no_verifier": {
+    "authenticity": "NOT_WITNESSED",
+    "coverage": "COMPLETE_FOR_DECLARED_PROFILE",
+    "coverage_gaps": [],
+    "errors": [],
+    "human_review": "MISSING",
+    "identity_assurance": "local-operator-asserted",
+    "reading": {
+     "state": "READING_SAVED"
+    },
+    "structure": "VALID",
+    "unknown_outcomes": [],
+    "witness_reason": "WITNESS_VERIFIER_UNAVAILABLE"
    },
    "edits": [],
    "name": "row_of_another_record",

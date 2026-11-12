@@ -183,8 +183,10 @@ does; nothing already there is replaced or removed. Any change of reader bytes a
 review and refreshed oracle evidence.
 
 DRAFT. The signature check needs the `cryptography` package (the `native` extra installs it); it is imported only
-when a row reaches that check. With the reader pinned today, such a row on a machine without `cryptography` is
-refused with `reader_unavailable` instead of returning a report.
+when a row reaches that check. On a machine without `cryptography` such a row gets the kit reader's own answer: a
+report, `NOT_WITNESSED`, with the kit's reason `WITNESS_VERIFIER_UNAVAILABLE`. A row the reader refuses before
+that check keeps the reason it has with `cryptography`. The reader checks the signature before it matches the row
+to the record, so a signed row of another record also reads `WITNESS_VERIFIER_UNAVAILABLE` there.
 
 DRAFT. `build_reference(receipt_bytes, reading_bytes, agent_id=...)` returns an ordinary `telos/0.1-unsigned`
 receipt of kind `kit_record_reference` whose payload is four fields: `record_schema`, `record_sha256`,

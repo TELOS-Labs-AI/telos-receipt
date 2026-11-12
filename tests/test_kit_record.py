@@ -9,7 +9,9 @@ S4 import hygiene: no `h0a`, no `sys.path` change, `cryptography` only when a ro
 S5 no socket and no process; the temporary directory is private and is gone afterwards, also when the check raises.
 S6 the three size caps, each refused one byte over beside the same input at the cap.
 S7 `build_reference`: four payload keys, the kit's digests, verifies, validates against the published schema.
-S8 Python 3.10 is refused at import beside 3.11. (Its second half waits for the kit reader's next pin.)
+S8 Python 3.10 is refused at import beside 3.11. Without `cryptography` a row that reaches the signature step reads
+   as the kit reader reads it there (NOT_WITNESSED, WITNESS_VERIFIER_UNAVAILABLE), and a row refused before that
+   step keeps its reason, in either order.
 S9 the existing modules are byte-identical to 0.1.1.
 
 Amendments 1 and 2 to the contract (classes R1-R5; the tests named test_a2_* are amendment 2's):
@@ -26,7 +28,8 @@ The fixtures under kit_record_fixtures/ were made once by the kit's own entry po
 and a canary Ed25519 key that was never written to disk. `oracle.json` holds the canary PUBLIC pins and what the
 kit reader answered for every fixture and every changed directory: `canary_pins` is the kit's
 `check_record(path, pins=<canary>)`, `pinned_key_cli` is the line the kit reader command printed (it checks under
-the pinned Witness key, so a canary row reads NOT_WITNESSED there). No test opens a socket or a real key.
+the pinned Witness key, so a canary row reads NOT_WITNESSED there), `canary_pins_no_verifier` is the same
+`check_record` in a process where importing `cryptography` fails. No test opens a socket or a real key.
 """
 import ast
 import hashlib
@@ -1231,8 +1234,6 @@ class S8PythonFloor(Case):
             self.fail("telos_receipt/record.py is missing")
         ast.parse(path.read_text(encoding="utf-8"), feature_version=(3, 10))
 
-    WAITING = b"WITNESS_VERIFIER_UNAVAILABLE" not in (VENDOR / "witness.py").read_bytes() if VENDOR.is_dir() else True
-
     def without_cryptography(self):
         import builtins
         real = builtins.__import__
@@ -1245,9 +1246,7 @@ class S8PythonFloor(Case):
 
     # the records whose row is a contract row for the canary pins, so that reading them reaches the signature
     REACHED = ("witnessed", "reading_byte", "receipt_byte", "signature_byte", "row_of_another_record")
-    RE_PIN = "waits for the kit re-pin: the pinned reader has no WITNESS_VERIFIER_UNAVAILABLE"
 
-    @unittest.skipIf(WAITING, RE_PIN)
     def test_s8_without_cryptography_a_row_that_reaches_the_signature_reads_verifier_unavailable_beside_with_it(self):
         self.record()
         cases = [(name, fixture(name), kit) for name, kit in ORACLE["fixtures"].items()]
@@ -1271,7 +1270,6 @@ class S8PythonFloor(Case):
                     self.assertEqual(without, with_it)
         self.assertEqual(reached, set(self.REACHED))
 
-    @unittest.skipIf(WAITING, RE_PIN)
     def test_s8_a_row_refused_before_the_signature_keeps_its_reason_without_cryptography_in_either_order(self):
         record = self.record()
         receipt, row, reading = (fixture("witnessed")[name] for name in NAMES)
@@ -1287,7 +1285,7 @@ class S8PythonFloor(Case):
 
         def read(row_bytes, **pins):
             result = self.answer(record.check_record, receipt, row_bytes, reading, **pins)
-            return result.get("witness_state"), result["report"]["witness_reason"]
+            return result.get("witness_state"), result.get("report", result).get("witness_reason", result.get("reason"))
         self.assertEqual(read(row, pins=self.canary()), ("WITNESSED", None))
         for label, bad in early:
             with self.subTest(label, verifier=True):
@@ -1303,7 +1301,6 @@ class S8PythonFloor(Case):
         # nothing of that is remembered: with the verifier back the same row reads WITNESSED
         self.assertEqual(read(row, pins=self.canary()), ("WITNESSED", None))
 
-    @unittest.skipIf(WAITING, RE_PIN)
     def test_s8_a_process_that_never_had_cryptography_reads_verifier_unavailable_and_raises_nothing(self):
         self.record()
         row_byte = self.directory(changed(next(v for v in ORACLE["variants"] if v["name"] == "row_byte")), "row-byte")
@@ -1320,22 +1317,6 @@ class S8PythonFloor(Case):
                     self.assertEqual(call["reference"].get("kind"), "kit_record_reference")
                 reasons = sorted(call["dir"]["report"]["witness_reason"] for call in out["calls"])
                 self.assertEqual(reasons, ["WITNESS_FILE_INVALID", "WITNESS_VERIFIER_UNAVAILABLE"])
-
-    @unittest.skipUnless(WAITING, "the pinned reader answers a missing verifier itself")
-    def test_s8_until_the_re_pin_a_missing_cryptography_gives_no_report_at_all_and_never_witnessed(self):
-        record = self.record()
-        files = fixture("witnessed")
-        args = [files[name] for name in NAMES]
-        self.assertEqual(self.answer(record.check_record, *args, pins=self.canary())["report"]["authenticity"],
-                         "WITNESSED")
-        with self.without_cryptography():
-            for call, call_args in [(record.check_record, args),
-                                    (record.check_record_dir, [str(FIXTURES / "witnessed")])]:
-                self.assertEqual(self.answer(call, *call_args, pins=self.canary()), UNAVAILABLE)
-            # a record with no row to check never needs it
-            plain = fixture("not_witnessed")
-            self.assert_report(self.answer(record.check_record, plain["receipt.json"], None, plain["reading.json"],
-                                           pins=self.canary()), ORACLE["fixtures"]["not_witnessed"]["canary_pins"])
 
 
 def flat(text):
