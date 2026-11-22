@@ -183,3 +183,61 @@ def test_generic_builder_applies_chain_member_rules_to_every_kind(payload, exc, 
     build_receipt("note", {"v": 1, "sequence": 0, "previous_receipt_integrity_hash": None}, "a")
     with pytest.raises(exc, match=check):
         build_receipt("note", payload, "a")
+
+
+# A Python str may hold an astral character as two UTF-16 code units. The
+# canonical bytes escape it as \ud83d\ude00, which telos-verify parses back to
+# one character and accepts. Only a surrogate without its partner is outside
+# the domain. Each refusal sits beside the paired control it mutates.
+PAIR = "\ud83d\ude00"
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{"v": PAIR}, {"v": "a" + PAIR + "b"}, {PAIR: 1}, {"v": [PAIR, {"k": PAIR}]}],
+    ids=["value", "inside-value", "key", "nested"],
+)
+def test_paired_surrogates_are_accepted(payload):
+    r = build_receipt("note", payload, "demo-agent", issued_at=ISSUED)
+    assert verify_receipt(r)["match"] is True
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{"v": "\ude00\ud83d"}, {"v": "a\ud83d"}, {"v": "\ude00b"}, {"v": "\ud83d\ud83d\ude00"}, {"\ud83d": 1}],
+    ids=["reversed", "high-at-end", "low-alone", "high-high-low", "key-high-alone"],
+)
+def test_unpaired_surrogates_are_refused_beside_a_paired_control(payload):
+    build_receipt("note", {"v": PAIR}, "demo-agent", issued_at=ISSUED)
+    with pytest.raises(ValueError, match="TV-CANON-002"):
+        build_receipt("note", payload, "demo-agent", issued_at=ISSUED)
+
+
+def test_paired_surrogate_key_that_sorts_differently_once_parsed_is_refused():
+    # Python sorts the pair by its first code unit (U+D83D), so it precedes
+    # U+FFFF; telos-verify sorts the parsed character (U+1F600) after it. The
+    # recomputed hash would differ (TV-HASH-004), so the SDK refuses it.
+    build_receipt("note", {PAIR: 1, "\ud7ff": 2}, "demo-agent", issued_at=ISSUED)
+    with pytest.raises(ValueError, match="TV-HASH-004"):
+        build_receipt("note", {PAIR: 1, "\uffff": 2}, "demo-agent", issued_at=ISSUED)
+
+
+def test_paired_surrogate_key_that_repeats_a_key_once_parsed_is_refused():
+    # Both keys parse to the same character: telos-verify reports a repeated
+    # member (TV-PARSE-001).
+    build_receipt("note", {PAIR: 1, "x": 2}, "demo-agent", issued_at=ISSUED)
+    with pytest.raises(ValueError, match="TV-PARSE-001"):
+        build_receipt("note", {PAIR: 1, "\U0001f600": 2}, "demo-agent", issued_at=ISSUED)
+
+
+def test_issued_at_check_is_described_as_a_format_check():
+    # The check is the verifier's format regex; it does not validate calendar
+    # values, and neither the message nor the docstring may claim it does.
+    r = build_receipt("note", {"v": 1}, "demo-agent", issued_at="2026-02-30T00:00:00Z")
+    assert r["issued_at"] == "2026-02-30T00:00:00Z"
+    with pytest.raises(ValueError, match="RFC 3339 date-time format") as e:
+        build_receipt("note", {"v": 1}, "demo-agent", issued_at="yesterday")
+    assert "calendar" in str(e.value)
+    doc = " ".join(build_receipt.__doc__.split())
+    assert "`issued_at` must match the RFC 3339 date-time format" in doc
+    assert "must be an RFC 3339 date-time" not in doc
