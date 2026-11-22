@@ -35,7 +35,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 RECEIPT_VERSION = "telos/0.1-unsigned"
 SIGNING_STATUS = "unsigned_integrity_hash"
