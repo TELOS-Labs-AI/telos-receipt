@@ -1,9 +1,10 @@
 """telos-receipt: the canonical unsigned integrity-hash receipt contract.
 
-This is the single source of truth for the TELOS receipt envelope. Both the
-agent-facing trust surface (which serves + verifies receipts) and the telos-mcp
-governance server (which mints receipts when it scores an action) speak THIS
-shape, so a receipt minted by one verifies on the other with no translation.
+This is the single source of truth for the TELOS receipt envelope. The telos-mcp
+governance server mints receipts with it, and the independent telos-verify CLI
+checks them. The builders refuse the per-receipt inputs telos-verify fails that
+are listed in the README ("What the builders refuse"); chain contiguity across
+receipts is left to the verifier.
 
 The unsigned envelope uses only the standard library. Native receipt byte
 integrity is optional and requires the native extra. Both paths are offline.
@@ -13,15 +14,9 @@ receipt `payload`. Recomputing it confirms the payload matches the hash recorded
 in the receipt: it detects alteration of the payload relative to that recorded
 hash. It is key-free, so it is NOT a digital signature: anyone can recompute it
 (or mint a fresh payload + matching hash), and it says nothing about who issued
-the receipt or when. That honesty is the point. When the signing ceremony lands,
-a real signature populates the `signature` field and `signing_status` flips to
-the signed value, without changing this hash or the envelope shape.
-
-Go-live swap (no schema break, no re-architecture):
-  - The governance engine flips from stub to real (it computes real verdicts /
-    scores; the payload it commits to becomes real, not synthetic).
-  - The signer flips from null to a real signature: `signature` is filled and
-    `signing_status` changes. Every field already exists; nothing moves.
+the receipt or when. That honesty is the point. Signed receipts are separate
+contract versions (telos/0.2-ed25519, telos/0.3-ed25519, defined by telos-verify)
+with their own `receipt_version`; this package writes telos/0.1-unsigned only.
 
 Canonical form: json.dumps(payload, sort_keys=True, separators=(",", ":"),
 allow_nan=False), over JSON-native, finite payloads only. A value with no
@@ -48,7 +43,7 @@ ENGINE_LABEL = "telos v0.1 (unsigned integrity-hash; no governance engine wired)
 HASH_PREFIX = "sha256:"
 
 # The verdict labels telos-verify accepts on telos/0.1-unsigned receipts
-# (check TV-S2-002). build_action_receipt refuses any other label.
+# (check TV-S2-002). The builders refuse any other label on an action_governed payload.
 ACTION_VERDICTS = ("EXECUTE", "CLARIFY", "SUGGEST", "ESCALATE", "INERT")
 
 # Canonical number domain (telos-verify TV-CANON-001). Inside it, Python's
@@ -281,15 +276,16 @@ def build_receipt(
     """Build an unsigned integrity-hash receipt.
 
     `signature` is explicitly null and `signing_status` declares the unsigned
-    state, so no reader can mistake this for a digital signature. The envelope
-    shape is stable: a later signed build only fills `signature` and changes
-    `signing_status`.
+    state, so no reader can mistake this for a digital signature. Signed
+    receipts are a different `receipt_version`, not a filled-in 0.1 receipt.
 
     `engine` labels which engine produced the payload (e.g. the MCP
     governance scorer in stub mode). It is metadata, not hashed.
 
-    The receipt is refused (TypeError for a wrong type, ValueError for a value
-    out of range) when telos-verify would fail it: `kind`, `agent_id` and
+    The receipt is refused (mostly TypeError for a wrong type and ValueError for
+    a value out of range; `issued_at` raises ValueError for any invalid input,
+    including a non-str; the README table lists the class per rule) when
+    telos-verify would fail it: `kind`, `agent_id` and
     `engine` must be str, `issued_at` must be an RFC 3339 date-time with a
     zone, and every payload number and string must lie in the canonical domain
     (integers within +/-(2^53-1); non-zero floats with 0.0001 <= |x| < 1e16 and
