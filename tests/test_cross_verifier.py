@@ -122,6 +122,14 @@ GENERIC_CASES = [
     ("refuse-generic-domain-negative-zero", "refuse", "note", {"v": -0.0}),
     ("refuse-generic-surrogate-value", "refuse", "note", {"v": "\ud800"}),
     ("refuse-generic-surrogate-key", "refuse", "note", {"\udfff": 1}),
+    # A paired surrogate is one astral character once parsed; the verifier accepts it.
+    ("ok-generic-surrogate-pair-value", "ok", "note", {"v": "\ud83d\ude00"}),
+    ("ok-generic-surrogate-pair-key", "ok", "note", {"\ud83d\ude00": 1}),
+    ("refuse-generic-surrogate-reversed", "refuse", "note", {"v": "\ude00\ud83d"}),
+    ("refuse-generic-surrogate-high-at-end", "refuse", "note", {"v": "a\ud83d"}),
+    ("ok-generic-surrogate-pair-key-order-kept", "ok", "note", {"\ud83d\ude00": 1, "\ud7ff": 2}),
+    ("refuse-generic-surrogate-pair-key-reorders", "refuse", "note", {"\ud83d\ude00": 1, "\uffff": 2}),
+    ("refuse-generic-surrogate-pair-key-repeats", "refuse", "note", {"\ud83d\ude00": 1, "\U0001f600": 2}),
     # Chain-member rules apply to every kind, not only action_governed (review r2-2).
     ("ok-generic-chain-genesis", "ok", "note", {"v": 1, "sequence": 0, "previous_receipt_integrity_hash": None}),
     ("ok-generic-chain-later", "ok", "note",
@@ -201,6 +209,8 @@ def test_build_action_receipt_agrees_with_telos_verify(case, expect, override, t
 ENVELOPE_CASES = [
     ("ok-envelope-baseline", "ok", {}),
     ("ok-issued-at-fraction-offset", "ok", {"issued_at": "2026-11-14T00:00:00.123456789-05:00"}),
+    # Both tools check the format only; neither validates calendar values.
+    ("ok-issued-at-format-only-feb-30", "ok", {"issued_at": "2026-02-30T00:00:00Z"}),
     ("refuse-agent_id-int", "refuse", {"agent_id": 7}),
     ("refuse-engine-int", "refuse", {"engine": 7}),
     ("refuse-engine-none", "refuse", {"engine": None}),

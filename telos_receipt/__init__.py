@@ -169,6 +169,48 @@ def compute_integrity_hash(payload: Any) -> str:
     return HASH_PREFIX + hashlib.sha256(_canonical(payload)).hexdigest()
 
 
+def _has_unpaired_surrogate(s: str) -> bool:
+    # A high surrogate immediately followed by a low one is a valid UTF-16 pair:
+    # the canonical bytes escape it as two \u escapes that a JSON parser reads
+    # back as one astral character, which telos-verify accepts. Any other
+    # surrogate code unit has no character to stand for.
+    i, n = 0, len(s)
+    while i < n:
+        c = ord(s[i])
+        if 0xD800 <= c <= 0xDBFF and i + 1 < n and 0xDC00 <= ord(s[i + 1]) <= 0xDFFF:
+            i += 2
+            continue
+        if 0xD800 <= c <= 0xDFFF:
+            return True
+        i += 1
+    return False
+
+
+def _reparse_problem(canonical: bytes) -> str | None:
+    # telos-verify parses the receipt and recomputes the canonical bytes from
+    # the parsed value. A key written as a surrogate pair becomes one astral
+    # character there, which can repeat another key or sort to a different
+    # place. Either way the receipt would fail, so name the check it would fail.
+    repeated = []
+
+    def pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        for k, v in items:
+            if k in out:
+                repeated.append(k)
+            out[k] = v
+        return out
+
+    again = json.dumps(
+        json.loads(canonical, object_pairs_hook=pairs), sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
+    if repeated:
+        return "TV-PARSE-001: payload: a key written as a surrogate pair repeats another key once parsed"
+    if again != canonical:
+        return "TV-HASH-004: payload: a key written as a surrogate pair sorts differently once parsed"
+    return None
+
+
 def _domain_problem(value: Any, where: str) -> str | None:
     # Walk a payload that already passed _prevalidate (exact JSON-native types)
     # and report the first value outside telos-verify's canonical domain.
@@ -184,7 +226,7 @@ def _domain_problem(value: Any, where: str) -> str | None:
             return f"TV-CANON-001: {where}: float outside 0.0001 <= |x| < 1e16 ({value!r})"
         return None
     if t is str:
-        if any(0xD800 <= ord(c) <= 0xDFFF for c in value):
+        if _has_unpaired_surrogate(value):
             return f"TV-CANON-002: {where}: string contains an unpaired surrogate"
         return None
     if t is list:
@@ -195,7 +237,7 @@ def _domain_problem(value: Any, where: str) -> str | None:
         return None
     if t is dict:
         for k, v in value.items():
-            if any(0xD800 <= ord(c) <= 0xDFFF for c in k):
+            if _has_unpaired_surrogate(k):
                 return f"TV-CANON-002: {where}: key contains an unpaired surrogate"
             problem = _domain_problem(v, f"{where}.{k}")
             if problem:
@@ -286,10 +328,14 @@ def build_receipt(
     a value out of range; `issued_at` raises ValueError for any invalid input,
     including a non-str; the README table lists the class per rule) when
     telos-verify would fail it: `kind`, `agent_id` and
-    `engine` must be str, `issued_at` must be an RFC 3339 date-time with a
-    zone, and every payload number and string must lie in the canonical domain
-    (integers within +/-(2^53-1); non-zero floats with 0.0001 <= |x| < 1e16 and
-    no -0.0; no unpaired surrogates). `payload` must be a dict. For every kind,
+    `engine` must be str, `issued_at` must match the RFC 3339 date-time format
+    with a zone (a format check, the same one telos-verify applies; calendar
+    values such as 2026-02-30 are not validated), and every payload number and
+    string must lie in the canonical domain (integers within +/-(2^53-1);
+    non-zero floats with 0.0001 <= |x| < 1e16 and no -0.0; no unpaired
+    surrogates; a surrogate pair is accepted, but a key written as one must not
+    repeat another key or change the key order once parsed). `payload` must be
+    a dict. For every kind,
     `sequence` and `previous_receipt_integrity_hash` appear together or not at
     all, and `sequence` is an int. When `kind` is "action_governed" the payload
     must also meet that kind's member and field rules (see
@@ -301,12 +347,13 @@ def build_receipt(
     issued = issued_at if issued_at is not None else _now_iso()
     if type(issued) is not str or _RFC3339_RE.match(issued) is None:
         raise ValueError(
-            "TV-SCHEMA-001: `issued_at` must be an RFC 3339 date-time with a zone, e.g. 2026-01-01T00:00:00Z"
+            "TV-SCHEMA-001: `issued_at` must match the RFC 3339 date-time format with a zone, "
+            "e.g. 2026-01-01T00:00:00Z (a format check: calendar values are not validated)"
         )
     if type(payload) is not dict:
         raise TypeError(f"TV-SCHEMA-001: `payload` must be a JSON object (dict), not {type(payload).__name__}")
     integrity_hash = compute_integrity_hash(payload)
-    problem = _domain_problem(payload, "payload")
+    problem = _domain_problem(payload, "payload") or _reparse_problem(_canonical(payload))
     if problem:
         raise ValueError(problem)
     _check_chain_members(payload)
