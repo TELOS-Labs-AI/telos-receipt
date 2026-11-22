@@ -47,6 +47,22 @@ SIGNING_STATUS = "unsigned_integrity_hash"
 ENGINE_LABEL = "telos v0.1 (unsigned integrity-hash; no governance engine wired)"
 HASH_PREFIX = "sha256:"
 
+# The verdict labels telos-verify accepts on telos/0.1-unsigned receipts
+# (check TV-S2-002). build_action_receipt refuses any other label.
+ACTION_VERDICTS = ("EXECUTE", "CLARIFY", "SUGGEST", "ESCALATE", "INERT")
+
+# Canonical number domain (telos-verify TV-CANON-001). Inside it, Python's
+# float repr and the ECMAScript Number-to-String algorithm emit the same digits
+# for every non-integral float, so a receipt built here hashes identically in
+# a JavaScript verifier except for the integral-float case (rule 6, README).
+MAX_SAFE_INT = 2**53 - 1
+_FLOAT_MIN_ABS = 1e-4
+_FLOAT_MAX_ABS = 1e16
+
+_RFC3339_RE = re.compile(
+    r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]{1,9})?(Z|[+-][0-9]{2}:[0-9]{2})\Z"
+)
+
 # A payload nested deeper than this is refused identically on every supported
 # runtime. Real receipt payloads are a handful of levels deep; the cap exists so
 # the accept/refuse boundary is a documented contract constant instead of
@@ -65,10 +81,12 @@ COVERED = "payload (canonical JSON, sort_keys, compact separators)"
 # and MAX_DEPTH is public because the depth cap is part of the accept/refuse
 # contract.
 __all__ = [
+    "ACTION_VERDICTS",
     "COVERED",
     "ENGINE_LABEL",
     "HASH_PREFIX",
     "MAX_DEPTH",
+    "MAX_SAFE_INT",
     "RECEIPT_VERSION",
     "SIGNING_STATUS",
     "__version__",
@@ -156,6 +174,141 @@ def compute_integrity_hash(payload: Any) -> str:
     return HASH_PREFIX + hashlib.sha256(_canonical(payload)).hexdigest()
 
 
+def _has_unpaired_surrogate(s: str) -> bool:
+    # A high surrogate immediately followed by a low one is a valid UTF-16 pair:
+    # the canonical bytes escape it as two \u escapes that a JSON parser reads
+    # back as one astral character, which telos-verify accepts. Any other
+    # surrogate code unit has no character to stand for.
+    i, n = 0, len(s)
+    while i < n:
+        c = ord(s[i])
+        if 0xD800 <= c <= 0xDBFF and i + 1 < n and 0xDC00 <= ord(s[i + 1]) <= 0xDFFF:
+            i += 2
+            continue
+        if 0xD800 <= c <= 0xDFFF:
+            return True
+        i += 1
+    return False
+
+
+def _reparse_problem(canonical: bytes) -> str | None:
+    # telos-verify parses the receipt and recomputes the canonical bytes from
+    # the parsed value. A key written as a surrogate pair becomes one astral
+    # character there, which can repeat another key or sort to a different
+    # place. Either way the receipt would fail, so name the check it would fail.
+    repeated = []
+
+    def pairs(items: list[tuple[str, Any]]) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        for k, v in items:
+            if k in out:
+                repeated.append(k)
+            out[k] = v
+        return out
+
+    again = json.dumps(
+        json.loads(canonical, object_pairs_hook=pairs), sort_keys=True, separators=(",", ":"), allow_nan=False
+    ).encode("utf-8")
+    if repeated:
+        return "TV-PARSE-001: payload: a key written as a surrogate pair repeats another key once parsed"
+    if again != canonical:
+        return "TV-HASH-004: payload: a key written as a surrogate pair sorts differently once parsed"
+    return None
+
+
+def _domain_problem(value: Any, where: str) -> str | None:
+    # Walk a payload that already passed _prevalidate (exact JSON-native types)
+    # and report the first value outside telos-verify's canonical domain.
+    t = type(value)
+    if t is int:
+        if abs(value) > MAX_SAFE_INT:
+            return f"TV-CANON-001: {where}: integer beyond 2^53-1"
+        return None
+    if t is float:
+        if value == 0.0 and math.copysign(1.0, value) < 0:
+            return f"TV-CANON-001: {where}: negative zero"
+        if value != 0.0 and not (_FLOAT_MIN_ABS <= abs(value) < _FLOAT_MAX_ABS):
+            return f"TV-CANON-001: {where}: float outside 0.0001 <= |x| < 1e16 ({value!r})"
+        return None
+    if t is str:
+        if _has_unpaired_surrogate(value):
+            return f"TV-CANON-002: {where}: string contains an unpaired surrogate"
+        return None
+    if t is list:
+        for i, item in enumerate(value):
+            problem = _domain_problem(item, f"{where}[{i}]")
+            if problem:
+                return problem
+        return None
+    if t is dict:
+        for k, v in value.items():
+            if _has_unpaired_surrogate(k):
+                return f"TV-CANON-002: {where}: key contains an unpaired surrogate"
+            problem = _domain_problem(v, f"{where}.{k}")
+            if problem:
+                return problem
+    return None
+
+
+def _is_number(value: Any) -> bool:
+    return type(value) is int or type(value) is float
+
+
+ACTION_GOVERNED = "action_governed"
+_AG_REQUIRED = ("action_name", "action_params_hash", "verdict", "composite_score", "scores", "pa_id")
+_AG_CHAIN = ("sequence", "previous_receipt_integrity_hash")
+
+
+def _check_chain_members(p: dict[str, Any]) -> None:
+    # telos-verify's per-receipt chain rules, applied to a payload of ANY kind:
+    # the two chain members appear together (TV-CHAIN-004) and `sequence` is an
+    # exact int (TV-CHAIN-001). Contiguity and linkage need the other receipts
+    # and stay with the verifier.
+    if ("sequence" in p) != ("previous_receipt_integrity_hash" in p):
+        raise ValueError("TV-CHAIN-004: `sequence` and `previous_receipt_integrity_hash` must appear together")
+    if "sequence" in p and type(p["sequence"]) is not int:
+        raise TypeError(f"TV-CHAIN-001: `sequence` must be int, not {type(p['sequence']).__name__}")
+
+
+def _check_action_governed(p: dict[str, Any]) -> None:
+    # telos-verify's per-receipt rules for an action_governed payload on
+    # telos/0.1-unsigned: members (TV-SCHEMA-001) and field forms (TV-S2-002..006).
+    # The chain members it admits are checked for every kind by _check_chain_members.
+    missing = [m for m in _AG_REQUIRED if m not in p]
+    if missing:
+        raise ValueError("TV-SCHEMA-001: action_governed payload lacks " + ", ".join(missing))
+    extra = sorted(set(p) - set(_AG_REQUIRED) - set(_AG_CHAIN))
+    if extra:
+        raise ValueError("TV-SCHEMA-001: action_governed payload has undeclared member(s) " + ", ".join(extra))
+    for name in ("action_name", "pa_id"):
+        if type(p[name]) is not str:
+            raise TypeError(f"TV-SCHEMA-001: `{name}` must be str, not {type(p[name]).__name__}")
+    aph = p["action_params_hash"]
+    if type(aph) is not str:
+        raise TypeError(f"TV-SCHEMA-001: `action_params_hash` must be str, not {type(aph).__name__}")
+    if _HASH_RE.fullmatch(aph) is None:
+        raise ValueError("TV-SCHEMA-001: `action_params_hash` must be 'sha256:' plus 64 lowercase hex characters")
+    if p["pa_id"] == "":
+        raise ValueError("TV-S2-006: `pa_id` must not be empty")
+    verdict = p["verdict"]
+    if type(verdict) is not str:
+        raise TypeError(f"TV-S2-002: `verdict` must be str, not {type(verdict).__name__}")
+    if verdict not in ACTION_VERDICTS:
+        raise ValueError(f"TV-S2-002: verdict {verdict!r} is not one of {', '.join(ACTION_VERDICTS)}")
+    if not _is_number(p["composite_score"]):
+        raise TypeError(
+            f"TV-S2-003: `composite_score` must be int or float, not {type(p['composite_score']).__name__}"
+        )
+    scores = p["scores"]
+    if type(scores) is not dict:
+        raise TypeError(f"TV-S2-004: `scores` must be a dict, not {type(scores).__name__}")
+    for label, value in scores.items():
+        if label == "":
+            raise ValueError("TV-S2-005: every `scores` label must be a non-empty str")
+        if not _is_number(value):
+            raise TypeError(f"TV-S2-004: scores[{label!r}] must be int or float, not {type(value).__name__}")
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -174,17 +327,49 @@ def build_receipt(
     shape is stable: a later signed build only fills `signature` and changes
     `signing_status`.
 
-    `engine` labels which engine produced the payload (e.g. the trust surface,
-    or the MCP governance scorer in stub mode). It is metadata, not hashed.
+    `engine` labels which engine produced the payload (e.g. the MCP
+    governance scorer in stub mode). It is metadata, not hashed.
+
+    The receipt is refused (TypeError for a wrong type, ValueError for a value
+    out of range) when telos-verify would fail it: `kind`, `agent_id` and
+    `engine` must be str, `issued_at` must match the RFC 3339 date-time format
+    with a zone (a format check, the same one telos-verify applies; calendar
+    values such as 2026-02-30 are not validated), and every payload number and
+    string must lie in the canonical domain (integers within +/-(2^53-1);
+    non-zero floats with 0.0001 <= |x| < 1e16 and no -0.0; no unpaired
+    surrogates; a surrogate pair is accepted, but a key written as one must not
+    repeat another key or change the key order once parsed). `payload` must be
+    a dict. For every kind,
+    `sequence` and `previous_receipt_integrity_hash` appear together or not at
+    all, and `sequence` is an int. When `kind` is "action_governed" the payload
+    must also meet that kind's member and field rules (see
+    build_action_receipt). Check ids in the messages are telos-verify's.
     """
+    for name, value in (("kind", kind), ("agent_id", agent_id), ("engine", engine)):
+        if type(value) is not str:
+            raise TypeError(f"TV-SCHEMA-001: `{name}` must be str, not {type(value).__name__}")
     issued = issued_at if issued_at is not None else _now_iso()
+    if type(issued) is not str or _RFC3339_RE.match(issued) is None:
+        raise ValueError(
+            "TV-SCHEMA-001: `issued_at` must match the RFC 3339 date-time format with a zone, "
+            "e.g. 2026-01-01T00:00:00Z (a format check: calendar values are not validated)"
+        )
+    if type(payload) is not dict:
+        raise TypeError(f"TV-SCHEMA-001: `payload` must be a JSON object (dict), not {type(payload).__name__}")
+    integrity_hash = compute_integrity_hash(payload)
+    problem = _domain_problem(payload, "payload") or _reparse_problem(_canonical(payload))
+    if problem:
+        raise ValueError(problem)
+    _check_chain_members(payload)
+    if kind == ACTION_GOVERNED:
+        _check_action_governed(payload)
     return {
         "receipt_version": RECEIPT_VERSION,
         "kind": kind,
         "agent_id": agent_id,
         "payload": payload,
         "issued_at": issued,
-        "integrity_hash": compute_integrity_hash(payload),
+        "integrity_hash": integrity_hash,
         "covered_fields": COVERED,
         "signing_status": SIGNING_STATUS,
         "signature": None,
@@ -211,13 +396,23 @@ def build_action_receipt(
     action params -- the raw params are deliberately not echoed, so the receipt
     is publishable without leaking the action's arguments.
 
-    The envelope is the same `build_receipt` shape the trust surface verifies,
-    so a receipt minted here verifies there unchanged.
+    The envelope is the same `build_receipt` shape, so telos-verify checks a
+    receipt minted here with no translation.
 
     `action_params` must be JSON-native and finite (the values that cross an MCP/
     HTTP boundary always are). A non-serializable or non-finite value raises,
-    rather than committing to a process-dependent hash.
+    rather than committing to a process-dependent hash. Only their hash enters
+    the payload, so they are not held to the canonical number domain.
+
+    The governance fields are refused (by build_receipt) when telos-verify would fail them:
+    `verdict` must be one of ACTION_VERDICTS (TV-S2-002); `composite_score` a
+    number (TV-S2-003); `scores` a dict of numbers (TV-S2-004) with non-empty
+    labels (TV-S2-005); `pa_id` a non-empty str (TV-S2-006); `action_name` a
+    str. bool is not a number here. Ranges are not checked: on 0.1 the verifier
+    imposes none beyond the canonical domain (see build_receipt).
     """
+    # The governance fields are checked once, in build_receipt, for every
+    # action_governed payload whichever builder produced it.
     payload = {
         "action_name": action_name,
         "action_params_hash": compute_integrity_hash(action_params),
