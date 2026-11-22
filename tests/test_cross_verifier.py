@@ -180,6 +180,8 @@ ACTION_CASES = [
     ("refuse-action-negative-zero", "refuse", {"composite_score": -0.0}),
     ("refuse-action-surrogate-label", "refuse", {"scores": {"\ud800": 0.5}}),
     ("refuse-action-surrogate-action_name", "refuse", {"action_name": "\udc00"}),
+    ("ok-action-surrogate-pair-label", "ok", {"scores": {"\ud83d\ude00": 0.5}}),
+    ("refuse-action-surrogate-pair-label-reorders", "refuse", {"scores": {"\ud83d\ude00": 0.5, "\uffff": 0.5}}),
 ]
 
 

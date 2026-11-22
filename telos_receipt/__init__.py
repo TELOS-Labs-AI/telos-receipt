@@ -389,8 +389,10 @@ def build_action_receipt(
     This is the receipt a governance scorer emits per action. The payload
     commits to the governance result (verdict + per-dimension scores + the PA
     it was measured against) and to *which* action was scored via a hash of the
-    action params -- the raw params are deliberately not echoed, so the receipt
-    is publishable without leaking the action's arguments.
+    action params. The raw params are omitted; only their SHA-256 digest
+    enters the payload. The digest is deterministic, so it reveals when two
+    receipts scored the same arguments, and anyone who can guess low-entropy
+    arguments (a short path, a yes/no flag) can confirm a guess by hashing it.
 
     The envelope is the same `build_receipt` shape, so telos-verify checks a
     receipt minted here with no translation.

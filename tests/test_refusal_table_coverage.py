@@ -46,9 +46,13 @@ ROW_CASES = {
     "every payload number": {RB: ["refuse-generic-domain-int", "refuse-generic-domain-negative-zero",
                                   "refuse-ag-domain-float"],
                              AB: ["refuse-action-1e-05", "refuse-action-2pow60"]},
-    "every payload string and key": {RB: ["refuse-generic-surrogate-value", "refuse-generic-surrogate-key"],
+    "every payload string and key": {RB: ["refuse-generic-surrogate-value", "refuse-generic-surrogate-key",
+                                          "refuse-generic-surrogate-reversed",
+                                          "refuse-generic-surrogate-pair-key-reorders",
+                                          "refuse-generic-surrogate-pair-key-repeats"],
                                      AB: ["refuse-action-surrogate-label",
-                                          "refuse-action-surrogate-action_name"]},
+                                          "refuse-action-surrogate-action_name",
+                                          "refuse-action-surrogate-pair-label-reorders"]},
 }
 
 

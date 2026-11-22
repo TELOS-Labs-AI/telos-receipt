@@ -46,7 +46,7 @@ Requires Python 3.10 or later.
 **Canonical form, stated exactly** (independent verifiers MUST match all six or payloads will falsely mismatch): keys sorted, compact separators (`,` `:`), NaN/Infinity refused, and **ASCII-escaped output** (Python `json.dumps` default `ensure_ascii=True`: non-ASCII characters serialize as `\uXXXX` escapes, including UTF-16 surrogate pairs for astral characters). A verifier emitting raw UTF-8 will compute a different hash on any non-ASCII payload. Two further rules govern numbers, because the action receipt carries floats:
 
 5. **Number formatting.** Floats serialize as Python's shortest round-trip `repr`: `0.1` emits `0.1`, not `0.10000000000000001`. This is **not** the same as the ECMAScript Number-to-String algorithm (`JSON.stringify`): Python emits `1.0` and `1e-05` where ECMAScript emits `1` and `0.00001`. Within the canonical number domain that `build_receipt` enforces (non-zero floats with 0.0001 <= |x| < 1e16) the two agree on every non-integral float; they still differ on integral floats such as `1.0`, which rule 6 makes significant. A non-Python verifier MUST reproduce Python's formatting, including the trailing `.0`, or float-bearing payloads will mismatch.
-6. **Number type is significant.** JSON has a single number type, but this contract preserves the payload's Python type: `1` (int) and `1.0` (float) are distinct inputs producing distinct hashes. A reimplementation that collapses `1.0` to `1` cannot reproduce a float-typed hash. `build_action_receipt` puts floats (`composite_score`, `scores`) into the payload, so this rule is load-bearing for action receipts.
+6. **Number type is significant.** JSON has a single number type, but this contract preserves the payload's Python type: `1` (int) and `1.0` (float) are distinct inputs producing distinct hashes. A reimplementation that collapses `1.0` to `1` cannot reproduce a float-typed hash. `build_action_receipt` puts `composite_score` and `scores` into the payload with the caller's numeric types (an `int` stays an `int`, a `float` stays a `float`), so this rule is load-bearing for action receipts.
 
 ### Known-answer vectors
 
@@ -137,7 +137,7 @@ telos-verify across files, not here.
 |---|---|---|---|---|
 | `kind` | `str` | `TV-SCHEMA-001` | `build_receipt` | `TypeError` |
 | `agent_id`, `engine` | `str` | `TV-SCHEMA-001` | both | `TypeError` |
-| `issued_at` | RFC 3339 date-time with a zone, e.g. `2026-01-01T00:00:00Z` (the default is the current UTC time) | `TV-SCHEMA-001` | both | `ValueError`, for a non-`str` as well as a malformed string |
+| `issued_at` | RFC 3339 date-time format with a zone, e.g. `2026-01-01T00:00:00Z` (a format check, as in telos-verify: calendar values such as `2026-02-30` are not validated; the default is the current UTC time) | `TV-SCHEMA-001` | both | `ValueError`, for a non-`str` as well as a malformed string |
 | `payload` | a `dict` (JSON object) | `TV-SCHEMA-001` | `build_receipt` | `TypeError` |
 | `sequence`, `previous_receipt_integrity_hash` | both or neither; `sequence` an `int` | `TV-CHAIN-004`, `TV-CHAIN-001` | `build_receipt`, payload of any `kind` | `ValueError` if one appears without the other; `TypeError` if `sequence` is not an `int` |
 | `action_governed` payload members | exactly `action_name`, `action_params_hash`, `verdict`, `composite_score`, `scores`, `pa_id`, plus optionally the chain pair above; none missing, none undeclared | `TV-SCHEMA-001` | `build_receipt` with `kind="action_governed"` | `ValueError` |
@@ -148,7 +148,7 @@ telos-verify across files, not here.
 | `scores` | a `dict` of `int`/`float` values with non-empty `str` labels | `TV-S2-004`, `TV-S2-005` | both (as above) | `TypeError` if not a `dict` or a value is not a number; `ValueError` for an empty label |
 | `pa_id` | a non-empty `str` | `TV-SCHEMA-001` (not a `str`), `TV-S2-006` (empty) | both (as above) | `TypeError` if not a `str`; `ValueError` if empty |
 | every payload number | integers within ±(2^53 − 1); floats not `-0.0` and, unless zero, with 0.0001 <= abs(x) < 1e16 | `TV-CANON-001` | both, payload of any `kind` | `ValueError` |
-| every payload string and key | no unpaired UTF-16 surrogate | `TV-CANON-002` | both, payload of any `kind` | `ValueError` |
+| every payload string and key | no unpaired UTF-16 surrogate (a surrogate pair is accepted); a key written as a surrogate pair must not repeat another key or change the key order once parsed | `TV-CANON-002`; `TV-PARSE-001` (repeats), `TV-HASH-004` (reorders) | both, payload of any `kind` | `ValueError` |
 
 `tests/test_cross_verifier.py` checks these rows against the telos-verify CLI (set
 `TELOS_VERIFY` to a telos-verify checkout; without it those tests are skipped). For
@@ -159,7 +159,7 @@ of inputs per row, not every possible input.
 
 The "Raises" column gives the exception for each row. Wrong types mostly raise
 `TypeError` and values outside a rule raise `ValueError`; `issued_at` is the
-exception, raising `ValueError` for any input that is not a valid RFC 3339 string,
+exception, raising `ValueError` for any input that does not match the RFC 3339 date-time format,
 including one that is not a `str`.
 
 Errors raised while canonicalizing the payload for hashing carry no check id.
