@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "telos-receipt"
 version = "0.1.1"
-description = "The canonical unsigned integrity-hash receipt contract for TELOS AI Labs: one envelope both the trust surface and the MCP governance server speak. Optional native-v2 byte-integrity verification."
+description = "The canonical unsigned integrity-hash receipt contract for TELOS AI Labs: build and recompute telos/0.1-unsigned receipts that telos-verify checks. Optional native-v2 byte-integrity verification."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "Apache-2.0" }

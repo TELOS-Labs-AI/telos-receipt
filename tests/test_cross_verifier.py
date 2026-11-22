@@ -103,6 +103,8 @@ GENERIC_CASES = [
     ("refuse-ag-pa_id-int", "refuse", "action_governed", {**AG, "pa_id": 7}),
     ("refuse-ag-pa_id-empty", "refuse", "action_governed", {**AG, "pa_id": ""}),
     ("refuse-ag-params-hash-form", "refuse", "action_governed", {**AG, "action_params_hash": "abc"}),
+    ("refuse-ag-params-hash-int", "refuse", "action_governed", {**AG, "action_params_hash": 7}),
+    ("refuse-ag-verdict-int", "refuse", "action_governed", {**AG, "verdict": 1}),
     ("refuse-ag-composite-string", "refuse", "action_governed", {**AG, "composite_score": "0.8"}),
     ("refuse-ag-composite-bool", "refuse", "action_governed", {**AG, "composite_score": True}),
     ("refuse-ag-scores-list", "refuse", "action_governed", {**AG, "scores": [0.5]}),
@@ -178,6 +180,8 @@ ACTION_CASES = [
     ("refuse-action-negative-zero", "refuse", {"composite_score": -0.0}),
     ("refuse-action-surrogate-label", "refuse", {"scores": {"\ud800": 0.5}}),
     ("refuse-action-surrogate-action_name", "refuse", {"action_name": "\udc00"}),
+    ("ok-action-surrogate-pair-label", "ok", {"scores": {"\ud83d\ude00": 0.5}}),
+    ("refuse-action-surrogate-pair-label-reorders", "refuse", {"scores": {"\ud83d\ude00": 0.5, "\uffff": 0.5}}),
 ]
 
 
@@ -241,7 +245,7 @@ def test_envelope_rows_agree_with_telos_verify(builder, case, expect, override, 
         assert rc in (1, 2), out
 
 
-@pytest.mark.parametrize("kind", [7, None, b"note"], ids=["int", "none", "bytes"])
+@pytest.mark.parametrize("kind", [7, None, b"note"], ids=["kind-int", "kind-none", "kind-bytes"])
 def test_kind_must_be_str_and_telos_verify_agrees(kind, tmp_path):
     ok = t.build_receipt("note", {"v": 1}, "demo-agent", issued_at=ISSUED)
     assert _cli(ok, tmp_path, "neighbour")[0] == 0

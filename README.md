@@ -2,17 +2,29 @@
 
 The canonical **unsigned integrity-hash receipt contract** for TELOS AI Labs.
 
-One receipt envelope, spoken by both ends of the trust loop:
+This package writes `telos/0.1-unsigned` receipts and recomputes their integrity
+hash. Two other public repositories use the same envelope:
 
-- **telos-mcp** mints a receipt when its governance scorer scores an action.
-- **telos-trust-surface** serves and verifies receipts other agents fetch.
-
-Because both import this package, a receipt minted by the scorer verifies on the
-trust surface unchanged, no translation, no second shape to keep in sync.
+- [telos-mcp](https://github.com/TELOS-Labs-AI/telos-mcp) mints a receipt with
+  this package each time its (stub) governance scorer scores an action.
+- [telos-verify](https://github.com/TELOS-Labs-AI/telos-verify) is the offline
+  command-line verifier. It checks a receipt's structure, field forms and
+  integrity hash. The builders here refuse the specific inputs listed in
+  [What the builders refuse](#what-the-builders-refuse), each of which telos-verify
+  fails on a single receipt.
 
 The unsigned envelope API uses only the Python standard library. Optional
 native-v2 receipt verification requires `telos-receipt[native]`. Both APIs run
 offline.
+
+## Install
+
+```bash
+pip install telos-receipt            # envelope API, no dependencies
+pip install 'telos-receipt[native]'  # adds verify_native_receipts (needs cryptography)
+```
+
+Requires Python 3.10 or later.
 
 ## The envelope
 
@@ -33,8 +45,8 @@ offline.
 
 **Canonical form, stated exactly** (independent verifiers MUST match all six or payloads will falsely mismatch): keys sorted, compact separators (`,` `:`), NaN/Infinity refused, and **ASCII-escaped output** (Python `json.dumps` default `ensure_ascii=True`: non-ASCII characters serialize as `\uXXXX` escapes, including UTF-16 surrogate pairs for astral characters). A verifier emitting raw UTF-8 will compute a different hash on any non-ASCII payload. Two further rules govern numbers, because the action receipt carries floats:
 
-5. **Number formatting.** Floats serialize as Python's shortest round-trip `repr` (equivalently the ECMAScript Number-to-String algorithm): `0.1` emits `0.1`, not `0.10000000000000001`. A non-Python verifier MUST reproduce that exact formatting or any float-bearing payload will mismatch.
-6. **Number type is significant.** JSON has a single number type, but this contract preserves the payload's Python type: `1` (int) and `1.0` (float) are distinct inputs producing distinct hashes. A reimplementation that collapses `1.0` to `1` cannot reproduce a float-typed hash. `build_action_receipt` puts floats (`composite_score`, `scores`) into the payload, so this rule is load-bearing for action receipts.
+5. **Number formatting.** Floats serialize as Python's shortest round-trip `repr`: `0.1` emits `0.1`, not `0.10000000000000001`. This is **not** the same as the ECMAScript Number-to-String algorithm (`JSON.stringify`): Python emits `1.0` and `1e-05` where ECMAScript emits `1` and `0.00001`. Within the canonical number domain that `build_receipt` enforces (non-zero floats with 0.0001 <= |x| < 1e16) the two agree on every non-integral float; they still differ on integral floats such as `1.0`, which rule 6 makes significant. A non-Python verifier MUST reproduce Python's formatting, including the trailing `.0`, or float-bearing payloads will mismatch.
+6. **Number type is significant.** JSON has a single number type, but this contract preserves the payload's Python type: `1` (int) and `1.0` (float) are distinct inputs producing distinct hashes. A reimplementation that collapses `1.0` to `1` cannot reproduce a float-typed hash. `build_action_receipt` puts `composite_score` and `scores` into the payload with the caller's numeric types (an `int` stays an `int`, a `float` stays a `float`), so this rule is load-bearing for action receipts.
 
 ### Known-answer vectors
 
@@ -72,13 +84,15 @@ or validate a receipt's `signature` or `signing_status` fields; its result alway
 reports `signature_verified: false` and the library's own unsigned
 `signing_status` constant, never the receipt's self-declared value.
 
-## Going live (no schema break)
+## Signed receipts
 
-Two internals flip; the shape does not move:
-
-1. The governance engine flips stub → real (real verdicts/scores in the payload).
-2. The signer flips null → real: `signature` is filled and `signing_status`
-   changes. Every field already exists.
+This package writes unsigned `telos/0.1-unsigned` receipts only. Signing is not a
+fill-in of the `signature` field on a 0.1 receipt: telos-verify defines signed
+receipts as separate versions (`telos/0.2-ed25519`, and `telos/0.3-ed25519`, which
+adds payload fields and uses a different verdict vocabulary), and it reports a
+0.1 receipt that carries a signature as INCOMPLETE (`TV-SIG-001`). See the version
+table at the top of the
+[telos-verify README](https://github.com/TELOS-Labs-AI/telos-verify#readme).
 
 ## API
 
@@ -97,7 +111,76 @@ r = build_action_receipt(
 assert verify_receipt(r)["match"] is True
 ```
 
+To check the same receipt with the independent verifier:
+
+```bash
+python -c 'import json, telos_receipt as t; print(json.dumps(t.build_action_receipt(
+    action_name="write_file", action_params={"path": "/tmp/x"}, agent_id="demo-agent",
+    verdict="EXECUTE", composite_score=0.81, scores={"purpose": 0.9, "scope": 0.8},
+    pa_id="pa::demo-agent::v1")))' > receipt.json
+git clone https://github.com/TELOS-Labs-AI/telos-verify.git
+python3 telos-verify/telos_verify.py receipt.json   # exit 0: VERIFIED (unsigned integrity only)
+```
+
+### What the builders refuse
+
+Each builder raises on the inputs below rather than write a receipt that
+telos-verify fails. Each of these refusals starts its message with the telos-verify
+check id from the "Check" column (for example `TV-S2-005: ...`). The
+"Applies to" column says which builder checks which row: `build_action_receipt`
+fixes `kind` and assembles the payload itself, then passes it to `build_receipt`,
+so both run the same code for the rows they share. The rules are per receipt:
+whether a run of receipts forms a contiguous, correctly linked chain is checked by
+telos-verify across files, not here.
+
+| Input | Rule | Check | Applies to | Raises |
+|---|---|---|---|---|
+| `kind` | `str` | `TV-SCHEMA-001` | `build_receipt` | `TypeError` |
+| `agent_id`, `engine` | `str` | `TV-SCHEMA-001` | both | `TypeError` |
+| `issued_at` | RFC 3339 date-time format with a zone, e.g. `2026-01-01T00:00:00Z` (a format check, as in telos-verify: calendar values such as `2026-02-30` are not validated; the default is the current UTC time) | `TV-SCHEMA-001` | both | `ValueError`, for a non-`str` as well as a malformed string |
+| `payload` | a `dict` (JSON object) | `TV-SCHEMA-001` | `build_receipt` | `TypeError` |
+| `sequence`, `previous_receipt_integrity_hash` | both or neither; `sequence` an `int` | `TV-CHAIN-004`, `TV-CHAIN-001` | `build_receipt`, payload of any `kind` | `ValueError` if one appears without the other; `TypeError` if `sequence` is not an `int` |
+| `action_governed` payload members | exactly `action_name`, `action_params_hash`, `verdict`, `composite_score`, `scores`, `pa_id`, plus optionally the chain pair above; none missing, none undeclared | `TV-SCHEMA-001` | `build_receipt` with `kind="action_governed"` | `ValueError` |
+| `action_params_hash` | `sha256:` plus 64 lowercase hex characters | `TV-SCHEMA-001` | `build_receipt` with `kind="action_governed"` | `TypeError` if not a `str`; `ValueError` if malformed |
+| `action_name` | `str` | `TV-SCHEMA-001` | both (for `build_receipt`, as an `action_governed` payload member) | `TypeError` |
+| `verdict` | one of `ACTION_VERDICTS`: `EXECUTE`, `CLARIFY`, `SUGGEST`, `ESCALATE`, `INERT` | `TV-S2-002` | both (as above) | `TypeError` if not a `str`; `ValueError` if another label |
+| `composite_score` | an `int` or `float` (not `bool`) | `TV-S2-003` | both (as above) | `TypeError` |
+| `scores` | a `dict` of `int`/`float` values with non-empty `str` labels | `TV-S2-004`, `TV-S2-005` | both (as above) | `TypeError` if not a `dict` or a value is not a number; `ValueError` for an empty label |
+| `pa_id` | a non-empty `str` | `TV-SCHEMA-001` (not a `str`), `TV-S2-006` (empty) | both (as above) | `TypeError` if not a `str`; `ValueError` if empty |
+| every payload number | integers within ±(2^53 − 1); floats not `-0.0` and, unless zero, with 0.0001 <= abs(x) < 1e16 | `TV-CANON-001` | both, payload of any `kind` | `ValueError` |
+| every payload string and key | no unpaired UTF-16 surrogate (a surrogate pair is accepted); a key written as a surrogate pair must not repeat another key or change the key order once parsed | `TV-CANON-002`; `TV-PARSE-001` (repeats), `TV-HASH-004` (reorders) | both, payload of any `kind` | `ValueError` |
+
+`tests/test_cross_verifier.py` checks these rows against the telos-verify CLI (set
+`TELOS_VERIFY` to a telos-verify checkout; without it those tests are skipped). For
+each row, and for each builder the row applies to, at least one input is refused by
+the builder, and the same receipt assembled by hand fails the CLI (exit 1 or 2).
+Valid receipts built in the same tests pass it (exit 0). The cases are a selection
+of inputs per row, not every possible input.
+
+The "Raises" column gives the exception for each row. Wrong types mostly raise
+`TypeError` and values outside a rule raise `ValueError`; `issued_at` is the
+exception, raising `ValueError` for any input that does not match the RFC 3339 date-time format,
+including one that is not a `str`.
+
+Errors raised while canonicalizing the payload for hashing carry no check id.
+`compute_integrity_hash` runs after the envelope checks (kind, agent_id, engine,
+issued_at, payload type) and before the payload, chain and action_governed checks.
+It raises
+`TypeError` for a dict key that is not a `str` (including a non-`str` `scores`
+label, e.g. `scores={7: 0.5}`) or a value with no canonical JSON form (for example a
+`set`), and `ValueError` for a NaN or infinite float, a circular reference, or
+nesting deeper than `MAX_DEPTH`. These messages describe the problem in plain words
+without a `TV-` id.
+Score ranges are not checked: on `telos/0.1-unsigned` the verifier imposes none.
+`action_params` are only hashed (`action_params_hash` is
+`compute_integrity_hash(action_params)`), so they are not held to the number domain.
+
 ## Native receipt byte integrity
+
+A native-v2 receipt is the JSON Lines receipt format written by the TELOS fork of
+[hermes-agent](https://github.com/TELOS-Labs-AI/hermes-agent) (one receipt per
+line, each linked to its predecessor by hash). `tests/native-request.json` in this
+repository is a complete sample request.
 
 Install `pip install 'telos-receipt[native]'` to use `verify_native_receipts`.
 Pass a JSON object with exactly these supported fields:
@@ -132,5 +215,5 @@ Vendored verifier attribution and the MIT permission notice are in `NOTICE`.
 
 ## Related TELOS packages
 
-- [telos-mcp](https://github.com/TELOS-Labs-AI/telos-mcp): MCP tools using this receipt contract.
-- [telos-trust-surface](https://github.com/TELOS-Labs-AI/telos-trust-surface): receipt serving and verification.
+- [telos-mcp](https://github.com/TELOS-Labs-AI/telos-mcp): MCP server whose stub scorer mints receipts with this package.
+- [telos-verify](https://github.com/TELOS-Labs-AI/telos-verify): offline command-line verifier for receipts, including signed versions.
